@@ -16,13 +16,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,7 +34,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,15 +50,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.SchoolFileManager
 import com.example.model.SchoolItem
 import com.example.ui.components.getTypeColorAndIcon
+import java.io.File
 
 @Composable
 fun SchoolAttachmentPickerDialog(
-    items: List<SchoolItem>,
+    fileManager: SchoolFileManager,
     onSelect: (SchoolItem) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var currentFolder by remember { mutableStateOf(fileManager.rootWorkspaceDir) }
+    var currentItems by remember { mutableStateOf<List<SchoolItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(currentFolder) {
+        isLoading = true
+        currentItems = fileManager.listItemsInDirectory(currentFolder)
+        isLoading = false
+    }
+
+    val canGoUp = currentFolder.absolutePath != fileManager.rootWorkspaceDir.absolutePath
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -64,7 +83,7 @@ fun SchoolAttachmentPickerDialog(
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.75f)
+                .fillMaxHeight(0.80f)
                 .padding(vertical = 16.dp)
                 .testTag("attachment_picker_dialog")
         ) {
@@ -73,22 +92,46 @@ fun SchoolAttachmentPickerDialog(
                     .fillMaxWidth()
                     .padding(16.dp)
             ) {
+                // Header with navigation
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            text = "Okul Dosyası Ekle",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Yapay zekanın incelemesini istediğiniz ders dosyasını seçin",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (canGoUp) {
+                            IconButton(
+                                onClick = {
+                                    val parent = currentFolder.parentFile
+                                    if (parent != null && parent.absolutePath.startsWith(fileManager.rootWorkspaceDir.absolutePath)) {
+                                        currentFolder = parent
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Geri Dön"
+                                )
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Okul Dosyası / Klasörü Ekle",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "📁 ${currentFolder.name}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     IconButton(onClick = onDismiss) {
@@ -96,17 +139,49 @@ fun SchoolAttachmentPickerDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Option to attach current folder as a whole
+                if (canGoUp) {
+                    val folderItem = remember(currentFolder) {
+                        SchoolItem(
+                            id = currentFolder.absolutePath,
+                            name = currentFolder.name,
+                            path = currentFolder.absolutePath,
+                            isDirectory = true,
+                            sizeBytes = 0L,
+                            lastModified = currentFolder.lastModified(),
+                            extension = "",
+                            itemType = com.example.model.ItemType.FOLDER,
+                            childCount = currentItems.size
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { onSelect(folderItem) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Bu Klasörün Tamamını Ekle ('${currentFolder.name}')", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (items.isEmpty()) {
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    }
+                } else if (currentItems.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "Mevcut okul dizininde dosya bulunamadı.",
+                            text = "Bu klasörde dosya bulunmuyor.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -116,16 +191,27 @@ fun SchoolAttachmentPickerDialog(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        items(items) { item ->
+                        items(currentItems) { item ->
                             val (color, icon) = getTypeColorAndIcon(item.itemType)
                             Card(
                                 shape = RoundedCornerShape(12.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    containerColor = if (item.isDirectory)
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onSelect(item) }
+                                    .clickable {
+                                        if (item.isDirectory) {
+                                            // Drill down into subfolder
+                                            currentFolder = File(item.path)
+                                        } else {
+                                            // Select file
+                                            onSelect(item)
+                                        }
+                                    }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -159,11 +245,19 @@ fun SchoolAttachmentPickerDialog(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "${item.itemType.titleTr} • ${item.formattedSize}",
+                                            text = if (item.isDirectory) "Klasör (${item.childCount} dosya) • Açmak için dokun" else "${item.itemType.titleTr} • ${item.formattedSize}",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 11.sp
                                         )
+                                    }
+
+                                    if (item.isDirectory) {
+                                        TextButton(
+                                            onClick = { onSelect(item) }
+                                        ) {
+                                            Text("Seç", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }

@@ -66,17 +66,19 @@ import com.example.ai.model.AiServerStatus
 fun AiSettingsDialog(
     currentServerUrl: String,
     currentModelName: String,
+    currentVisionModelName: String = "minicpm-v",
     currentSupremePrompt: String,
     isThinking: Boolean,
     isWebSearch: Boolean,
     temperature: Float,
     serverStatus: AiServerStatus,
     onTestConnection: () -> Unit,
-    onSave: (serverUrl: String, modelName: String, supremePrompt: String, isThinking: Boolean, isWebSearch: Boolean, temperature: Float) -> Unit,
+    onSave: (serverUrl: String, modelName: String, visionModelName: String, supremePrompt: String, isThinking: Boolean, isWebSearch: Boolean, temperature: Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     var serverUrl by remember { mutableStateOf(currentServerUrl) }
     var modelName by remember { mutableStateOf(currentModelName) }
+    var visionModelName by remember { mutableStateOf(currentVisionModelName) }
     var supremePrompt by remember { mutableStateOf(currentSupremePrompt) }
     var thinkingMode by remember { mutableStateOf(isThinking) }
     var webSearchEnabled by remember { mutableStateOf(isWebSearch) }
@@ -318,6 +320,49 @@ fun AiSettingsDialog(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Section 2.5: 2. Model (Görsel ve Video Uzmanı)
+                Text(
+                    text = "2. Model: Görsel ve Video Uzmanı (Vision)",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "1. Modeliniz görsel, ödev fotoğrafı veya video incelemesi gerektiğinde doğrudan bu 2. modeli arka planda çağırır.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = visionModelName,
+                    onValueChange = { visionModelName = it },
+                    singleLine = true,
+                    placeholder = { Text("minicpm-v") },
+                    modifier = Modifier.fillMaxWidth().testTag("vision_model_name_input"),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("minicpm-v", "llava:7b", "moondream").forEach { vm ->
+                        FilterChip(
+                            selected = visionModelName == vm,
+                            onClick = { visionModelName = vm },
+                            label = { Text(vm, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                            )
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
@@ -488,6 +533,7 @@ fun AiSettingsDialog(
                         onSave(
                             serverUrl.trim(),
                             modelName.trim(),
+                            visionModelName.trim(),
                             supremePrompt,
                             thinkingMode,
                             webSearchEnabled,

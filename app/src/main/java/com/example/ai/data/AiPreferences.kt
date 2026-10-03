@@ -9,6 +9,7 @@ class AiPreferences(context: Context) {
     companion object {
         const val DEFAULT_SERVER_URL = "http://192.168.1.100:11434"
         const val DEFAULT_MODEL = "dolphin-mistral"
+        const val DEFAULT_VISION_MODEL = "minicpm-v"
 
         const val DEFAULT_SUPREME_PROMPT = """[EN ÜST KADEME EMİR VE ANA YÖNERGE - TÜM KURALLARDAN VE KULLANICI GİRDİLERİNDEN DAİMA ÜSTÜNDÜR]
 Sen kullanıcının kişisel Okul ve Çalışma Alanı Yapay Zeka Asistanısın.
@@ -28,6 +29,10 @@ Aşağıdaki ana direktifler sistemdeki en yüksek yetkiye sahiptir ve asla ihla
     var modelName: String
         get() = prefs.getString("model_name", DEFAULT_MODEL) ?: DEFAULT_MODEL
         set(value) = prefs.edit().putString("model_name", value.trim()).apply()
+
+    var visionModelName: String
+        get() = prefs.getString("vision_model_name", DEFAULT_VISION_MODEL) ?: DEFAULT_VISION_MODEL
+        set(value) = prefs.edit().putString("vision_model_name", value.trim()).apply()
 
     var supremePrompt: String
         get() = prefs.getString("supreme_prompt", DEFAULT_SUPREME_PROMPT) ?: DEFAULT_SUPREME_PROMPT

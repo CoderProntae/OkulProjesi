@@ -407,14 +407,15 @@ fun AiChatScreen(
         AiSettingsDialog(
             currentServerUrl = uiState.serverUrl,
             currentModelName = uiState.modelName,
+            currentVisionModelName = uiState.visionModelName,
             currentSupremePrompt = uiState.supremePrompt,
             isThinking = uiState.isThinkingEnabled,
             isWebSearch = uiState.isWebSearchEnabled,
             temperature = uiState.temperature,
             serverStatus = uiState.serverStatus,
             onTestConnection = { viewModel.testServerConnection() },
-            onSave = { sUrl, mName, sPrompt, isTh, isWs, temp ->
-                viewModel.saveSettings(sUrl, mName, sPrompt, isTh, isWs, temp)
+            onSave = { sUrl, mName, vName, sPrompt, isTh, isWs, temp ->
+                viewModel.saveSettings(sUrl, mName, vName, sPrompt, isTh, isWs, temp)
             },
             onDismiss = { viewModel.setShowSettings(false) }
         )
@@ -423,7 +424,7 @@ fun AiChatScreen(
     // Attachment Picker Modal
     if (uiState.showAttachmentPicker) {
         SchoolAttachmentPickerDialog(
-            items = uiState.availableSchoolFiles,
+            fileManager = viewModel.fileManager,
             onSelect = { item -> viewModel.attachSchoolFile(item) },
             onDismiss = { viewModel.closeAttachmentPicker() }
         )

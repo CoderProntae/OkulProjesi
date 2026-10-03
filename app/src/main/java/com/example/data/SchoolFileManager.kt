@@ -95,13 +95,15 @@ class SchoolFileManager(private val context: Context) {
         currentDirectory = rootWorkspaceDir
     }
 
-    suspend fun listItemsInCurrentDirectory(): List<SchoolItem> = withContext(Dispatchers.IO) {
-        val files = currentDirectory.listFiles() ?: return@withContext emptyList()
-        val list = files.map { file ->
+    suspend fun listItemsInCurrentDirectory(): List<SchoolItem> = listItemsInDirectory(currentDirectory)
+
+    suspend fun listItemsInDirectory(dir: File): List<SchoolItem> = withContext(Dispatchers.IO) {
+        val files = dir.listFiles() ?: return@withContext emptyList()
+        val list = files.filter { !it.name.startsWith(".") }.map { file ->
             val isDir = file.isDirectory
             val ext = if (isDir) "" else file.extension
             val type = ItemType.fromExtension(ext, isDir)
-            val childCount = if (isDir) (file.listFiles()?.size ?: 0) else 0
+            val childCount = if (isDir) (file.listFiles()?.count { !it.name.startsWith(".") } ?: 0) else 0
             val size = if (isDir) calculateFolderSize(file) else file.length()
 
             SchoolItem(
@@ -134,10 +136,71 @@ class SchoolFileManager(private val context: Context) {
             return@withContext Result.failure(IllegalStateException("Bu isimde bir klasör veya dosya zaten mevcut"))
         }
         if (target.mkdirs()) {
+            mirrorToPersistentStorage()
             Result.success(target)
         } else {
             Result.failure(Exception("Klasör oluşturulamadı"))
         }
+    }
+
+    suspend fun buildFullWorkspaceHierarchy(maxDepth: Int = 3): String = withContext(Dispatchers.IO) {
+        val sb = StringBuilder()
+        fun traverse(dir: File, depth: Int, indent: String) {
+            if (depth > maxDepth) return
+            val files = dir.listFiles() ?: return
+            val sorted = files.sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
+            for (f in sorted) {
+                if (f.name.startsWith(".")) continue
+                if (f.isDirectory) {
+                    val count = f.listFiles()?.count { !it.name.startsWith(".") } ?: 0
+                    sb.append("$indent📁 ${f.name}/ ($count öge)\n")
+                    traverse(f, depth + 1, "$indent  ")
+                } else {
+                    val ext = f.extension.lowercase()
+                    val icon = when (ext) {
+                        "txt", "md" -> "📄"
+                        "mp3", "wav", "m4a", "ogg" -> "🎵"
+                        "mp4", "mkv" -> "🎬"
+                        "pdf" -> "📕"
+                        "jpg", "png", "webp" -> "🖼️"
+                        else -> "📎"
+                    }
+                    val preview = if (ext in listOf("txt", "md") && f.length() < 200_000) {
+                        try {
+                            val head = f.readText().lines().filter { it.isNotBlank() }.take(2).joinToString(" | ")
+                            if (head.isNotBlank()) " [Özet: ${head.take(80)}...]" else ""
+                        } catch (_: Exception) { "" }
+                    } else ""
+                    sb.append("$indent$icon ${f.name}$preview\n")
+                }
+            }
+        }
+        sb.append("📁 OkulDizini/ (Kök Çalışma Alanı)\n")
+        traverse(rootWorkspaceDir, 1, "  ")
+        sb.toString()
+    }
+
+    fun findAssociatedTranscript(audioFileName: String): String? {
+        val baseName = audioFileName.substringBeforeLast(".")
+        val searchDirs = listOf(currentDirectory, rootWorkspaceDir)
+        for (dir in searchDirs) {
+            val directMatch = File(dir, "$baseName.txt")
+            if (directMatch.exists() && directMatch.isFile) return directMatch.readText()
+            val transcriptMatch = File(dir, "${baseName}_transcript.txt")
+            if (transcriptMatch.exists() && transcriptMatch.isFile) return transcriptMatch.readText()
+            val srtMatch = File(dir, "$baseName.srt")
+            if (srtMatch.exists() && srtMatch.isFile) return srtMatch.readText()
+            val lrcMatch = File(dir, "$baseName.lrc")
+            if (lrcMatch.exists() && lrcMatch.isFile) return lrcMatch.readText()
+            val related = dir.listFiles { _, name ->
+                name.endsWith(".txt", ignoreCase = true) &&
+                (name.contains("ders", ignoreCase = true) || name.contains("kelime", ignoreCase = true) || name.contains("plan", ignoreCase = true))
+            }
+            if (!related.isNullOrEmpty()) {
+                return related.first().readText()
+            }
+        }
+        return null
     }
 
     suspend fun createTextFile(name: String, content: String = ""): Result<File> = withContext(Dispatchers.IO) {

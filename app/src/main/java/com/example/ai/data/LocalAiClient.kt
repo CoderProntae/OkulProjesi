@@ -2,6 +2,7 @@ package com.example.ai.data
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.util.Base64
 import com.example.ai.model.AiServerStatus
 import com.example.ai.model.ChatMessage
@@ -75,13 +76,16 @@ class LocalAiClient(
     suspend fun sendChat(
         serverUrl: String,
         modelName: String,
+        visionModelName: String = "minicpm-v",
         supremePrompt: String,
         messages: List<ChatMessage>,
         temperature: Float = 0.7f,
+        isThinkingEnabled: Boolean = false,
         attachedItem: SchoolItem? = null,
         attachedFileContent: String? = null,
         webSearchSummary: String? = null,
-        workspaceOverview: String? = null
+        workspaceOverview: String? = null,
+        onChunk: ((String) -> Unit)? = null
     ): Result<Pair<String, String?>> = withContext(Dispatchers.IO) {
         val cleanUrl = serverUrl.trim().removeSuffix("/")
 
@@ -91,14 +95,25 @@ class LocalAiClient(
             // 1. Injected Supreme Prompt (En Üst Kademe Prompt - System Message with absolute priority)
             val supremeSystemContent = buildString {
                 append(supremePrompt)
-                append("\n\n[SİSTEM BİLGİSİ VE ÇALIŞMA ALANI ORTAMI]")
-                append("\nKullanıcının Android telefonunda 'Okul Dosyaları' uygulaması çalışıyor.")
-                append("\nKullanıcının okul dizinindeki tüm ders notlarını inceleyebilir, dosyaları yeniden adlandırabilir veya yeni notlar oluşturabilirsin.")
-                if (!workspaceOverview.isNullOrBlank()) {
-                    append("\n\n[MEVCUT OKUL DİZİNİ VE DOSYALAR]:\n").append(workspaceOverview)
+                append("\n\n[SENİN KİMLİĞİN VE ÇALIŞMA ALANI ORTAMI]")
+                append("\nSen kullanıcının Android cihazındaki yerel yapay zeka asistanı ve Okul Dosya Yöneticisisin.")
+                append("\nModel adın: $modelName.")
+                append("\nKESİNLİKLE YASAK: Kullanıcı okul dizini, ödevler, formüller, ses dosyaları veya notlar hakkında soru sorduğunda ASLA 'dosyalara erişimim yok', 'ben sadece bir yapay zekayım', 'sisteminize doğrudan ulaşamam' gibi mazeretler üretme! Sen doğrudan telefonun okul dizini içindesin ve tüm klasörler ile dosyalar sana aşağıda verilmiştir.")
+                if (isThinkingEnabled) {
+                    append("\n\n[DÜŞÜNME MODU AKTİF]: Nihai yanıtını vermeden önce adım adım düşünme sürecini <think>...</think> etiketleri içerisine yaz. Ardından doğrudan nihai yanıtını ve çözümlerini sun.")
                 }
+                if (!workspaceOverview.isNullOrBlank()) {
+                    append("\n\n[MEVCUT TAM OKUL ÇALIŞMA ALANI AĞACI]:\n").append(workspaceOverview)
+                }
+                append("\n\n[2. MODEL ENTEGRASYONU - GÖRSEL VE VİDEO UZMANI ($visionModelName)]:")
+                append("\nSistemde görsel (fotoğraf/belge/ödev/el yazısı/grafik) ve video analizi yapabilen 2. bir model ($visionModelName) hazırdır.")
+                append("\nKullanıcı bir görsel veya video hakkında soru sorduğunda ya da bu dosyaları incelemen gerektiğinde şu komutla 2. modeli çağırabilirsin:")
+                append("\n- [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | sorulacak_soru]")
+                append("\n2. model ($visionModelName) video karelerini ve fotoğrafları yüksek çözünürlükte inceleyip sonucu sana aktaracaktır.")
+
                 append("\n\n[EYLEM VE ARAÇ KULLANIM SÖZ DİZİMİ - Kullanıcı okul dosyalarını veya sistemi yönetmeni istediğinde bu komutları kullanabilirsin]:")
                 append("\n- Dosya içeriğini incelemek/okumak için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
+                append("\n- Görsel veya video dosyalarını 2. modele inceletmek için: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | soru]")
                 append("\n- Mevcut metin/.txt dosyasını düzenlemek/güncellemek için: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]")
                 append("\n- Yeni ders notu veya dosya oluşturmak için: [KOMUT: NOT_OLUŞTUR | dosya_adi.txt | içerik]")
                 append("\n- Yeni okul klasörü açmak için: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]")
@@ -157,10 +172,11 @@ class LocalAiClient(
             }
 
             // Prepare Ollama request payload
+            val useStream = onChunk != null
             val payload = JSONObject().apply {
                 put("model", modelName)
                 put("messages", messagesArray)
-                put("stream", false)
+                put("stream", useStream)
                 put("options", JSONObject().apply {
                     put("temperature", temperature.toDouble())
                     put("num_predict", 2048)
@@ -189,10 +205,30 @@ class LocalAiClient(
                 return@withContext Result.failure(Exception(msg))
             }
 
-            val respBody = response.body?.string().orEmpty()
-            val respJson = JSONObject(respBody)
-            val msgObj = respJson.optJSONObject("message")
-            val fullContent = msgObj?.optString("content", "").orEmpty()
+            val fullContent: String
+            if (useStream) {
+                val fullBuilder = StringBuilder()
+                val source = response.body?.source() ?: return@withContext Result.failure(Exception("Boş yanıt alındı"))
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    try {
+                        val chunkObj = JSONObject(line)
+                        val msgObj = chunkObj.optJSONObject("message")
+                        val contentPiece = msgObj?.optString("content", "").orEmpty()
+                        if (contentPiece.isNotEmpty()) {
+                            fullBuilder.append(contentPiece)
+                            onChunk?.invoke(contentPiece)
+                        }
+                    } catch (_: Exception) {}
+                }
+                fullContent = fullBuilder.toString()
+            } else {
+                val respBody = response.body?.string().orEmpty()
+                val respJson = JSONObject(respBody)
+                val msgObj = respJson.optJSONObject("message")
+                fullContent = msgObj?.optString("content", "").orEmpty()
+            }
 
             // Separate <think>...</think> if thinking model (e.g. DeepSeek-R1)
             val (mainContent, thinkingContent) = extractThinking(fullContent)
@@ -232,5 +268,96 @@ class LocalAiClient(
         } catch (_: Exception) {
             null
         }
+    }
+
+    suspend fun callVisionModel(
+        serverUrl: String,
+        visionModelName: String,
+        prompt: String,
+        base64Images: List<String>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanUrl = serverUrl.trim().removeSuffix("/")
+        try {
+            val messagesArray = JSONArray()
+            val userMsg = JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+                if (base64Images.isNotEmpty()) {
+                    val imgArr = JSONArray()
+                    base64Images.forEach { imgArr.put(it) }
+                    put("images", imgArr)
+                }
+            }
+            messagesArray.put(userMsg)
+
+            val payload = JSONObject().apply {
+                put("model", visionModelName)
+                put("messages", messagesArray)
+                put("stream", false)
+                put("options", JSONObject().apply {
+                    put("temperature", 0.3)
+                    put("num_predict", 1024)
+                })
+            }
+
+            val requestBody = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url("$cleanUrl/api/chat")
+                .post(requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val err = response.body?.string().orEmpty()
+                return@withContext Result.failure(Exception("2. Görsel Model ($visionModelName) yanıt vermedi: HTTP ${response.code} ($err)"))
+            }
+            val respBody = response.body?.string().orEmpty()
+            val respJson = JSONObject(respBody)
+            val msgObj = respJson.optJSONObject("message")
+            val content = msgObj?.optString("content", "").orEmpty()
+            Result.success(content)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun extractMediaFrames(file: File, maxFrames: Int = 3): List<String> {
+        val ext = file.extension.lowercase()
+        return if (ext in listOf("mp4", "mkv", "webm", "avi", "3gp", "mov")) {
+            extractVideoFrames(file, maxFrames)
+        } else if (ext in listOf("jpg", "jpeg", "png", "webp")) {
+            val img = encodeImageToBase64(file)
+            if (img != null) listOf(img) else emptyList()
+        } else {
+            emptyList()
+        }
+    }
+
+    private fun extractVideoFrames(videoFile: File, maxFrames: Int = 3): List<String> {
+        val frames = mutableListOf<String>()
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(videoFile.absolutePath)
+            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            val durationMs = durationStr?.toLongOrNull() ?: 10000L
+            val intervals = (1..maxFrames).map { (durationMs * it / (maxFrames + 1)) * 1000L }
+            for (timeUs in intervals) {
+                val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (bitmap != null) {
+                    val maxDim = 640
+                    val scaled = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                        val ratio = minOf(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
+                        Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+                    } else bitmap
+                    val baos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                    frames.add(Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
+                }
+            }
+        } catch (_: Exception) {
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+        return frames
     }
 }

@@ -33,6 +33,7 @@ data class AiUiState(
     val availableSchoolFiles: List<SchoolItem> = emptyList(),
     val serverUrl: String = "",
     val modelName: String = "",
+    val visionModelName: String = "minicpm-v",
     val supremePrompt: String = "",
     val isThinkingEnabled: Boolean = true,
     val isWebSearchEnabled: Boolean = true,
@@ -51,6 +52,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
         AiUiState(
             serverUrl = preferences.serverUrl,
             modelName = preferences.modelName,
+            visionModelName = preferences.visionModelName,
             supremePrompt = preferences.supremePrompt,
             isThinkingEnabled = preferences.isThinkingEnabled,
             isWebSearchEnabled = preferences.isWebSearchEnabled,
@@ -187,6 +189,56 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            // Check if attached item is audio without content, search for associated transcript
+            if (attached != null && attachedContent == null) {
+                if (attached.extension.lowercase() in listOf("mp3", "wav", "m4a", "ogg")) {
+                    val associated = fileManager.findAssociatedTranscript(attached.name)
+                    attachedContent = if (associated != null) {
+                        "Bu ses dosyasıyla ilişkili ders transkripti / notu bulundu:\n$associated"
+                    } else {
+                        "Bu dosya bir ikili ses kaydıdır (${attached.name}, ${attached.formattedSize}). Kullanıcı bu ses dosyası hakkında soru sorduğunda ders içeriği veya transkripti hakkında rehberlik et."
+                    }
+                }
+            }
+
+            // Check if attached item is Image or Video -> Automatically invoke 2. Model (Vision Model)
+            if (attached != null && !attached.isDirectory) {
+                val ext = attached.extension.lowercase()
+                if (ext in listOf("jpg", "jpeg", "png", "webp", "mp4", "mkv", "webm", "avi", "mov")) {
+                    val isVideo = ext in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    _uiState.value = _uiState.value.copy(
+                        activeToolName = "👁️ 2. Model (${preferences.visionModelName}) ${if (isVideo) "Video Karelerini" else "Görseli"} İnceliyor...",
+                        statusMessage = "2. Model görüntü analizi yapıyor..."
+                    )
+                    val frames = aiClient.extractMediaFrames(File(attached.path), maxFrames = 3)
+                    if (frames.isNotEmpty()) {
+                        val visionPrompt = if (isVideo) {
+                            "Bu video dosyasından (${attached.name}) çıkarılan ${frames.size} adet kareyi bir öğrenci ders asistanı gözüyle detaylıca analiz et: Videoda ne gösteriliyor, hangi deney, slayt, metin, olay veya grafik var? Detaylı bir açıklama raporu hazırla."
+                        } else {
+                            "Bu görseli (${attached.name}) detaylıca incele: Görseldeki matematik formülleri, sorular, el yazıları, ders şemaları ve metinleri eksiksiz oku ve ne ifade ettiğini analiz et."
+                        }
+                        val visionResult = aiClient.callVisionModel(
+                            serverUrl = preferences.serverUrl,
+                            visionModelName = preferences.visionModelName,
+                            prompt = visionPrompt,
+                            base64Images = frames
+                        )
+                        if (visionResult.isSuccess) {
+                            val analysis = visionResult.getOrThrow()
+                            executedTools.add(
+                                ToolExecution(
+                                    toolName = "👁️ 2. Model (Vision: ${preferences.visionModelName})",
+                                    summary = "${attached.name} (${if (isVideo) "Video: ${frames.size} kare" else "Fotoğraf/Belge"}) 2. modelce incelendi",
+                                    inputDetail = "Dosya: ${attached.name} (${attached.formattedSize})\nModel: ${preferences.visionModelName}",
+                                    outputDetail = analysis
+                                )
+                            )
+                            attachedContent = "[2. GÖRSEL VE VİDEO MODELİNİN (${preferences.visionModelName}) ANALİZ RAPORU - Dosya: ${attached.name}]:\n$analysis"
+                        }
+                    }
+                }
+            }
+
             // 2. Web search if requested or query implies research
             var webSummary: String? = null
             if (forceWebSearch || (_uiState.value.isWebSearchEnabled && shouldTriggerWebSearch(trimmed))) {
@@ -208,24 +260,60 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // 3. Workspace overview
+            // 3. Workspace overview (recursive tree of entire school workspace)
             val workspaceOverview = buildWorkspaceSummary()
 
+            val placeholderMsg = ChatMessage(
+                role = MessageRole.ASSISTANT,
+                content = "",
+                thinkingContent = null,
+                toolExecutions = executedTools
+            )
             _uiState.value = _uiState.value.copy(
-                activeToolName = "Model Düşünüyor...",
-                statusMessage = "Yapay zeka yanıt hazırlıyor..."
+                messages = updatedList + placeholderMsg,
+                isGenerating = true,
+                statusMessage = "Yapay zeka yanıt yazıyor..."
             )
 
+            val accumulatedText = StringBuilder()
             val result = aiClient.sendChat(
                 serverUrl = preferences.serverUrl,
                 modelName = preferences.modelName,
+                visionModelName = preferences.visionModelName,
                 supremePrompt = preferences.supremePrompt,
                 messages = updatedList,
                 temperature = preferences.temperature,
+                isThinkingEnabled = preferences.isThinkingEnabled,
                 attachedItem = attached,
                 attachedFileContent = attachedContent,
                 webSearchSummary = webSummary,
-                workspaceOverview = workspaceOverview
+                workspaceOverview = workspaceOverview,
+                onChunk = { chunk ->
+                    accumulatedText.append(chunk)
+                    val rawSoFar = accumulatedText.toString()
+
+                    val activeTool = when {
+                        rawSoFar.contains("METİN_DÜZENLE") -> "⚙️ Dosya Düzenleniyor..."
+                        rawSoFar.contains("NOT_OLUŞTUR") || rawSoFar.contains("DOSYA_OLUŞTUR") -> "📝 Not Oluşturuluyor..."
+                        rawSoFar.contains("KLASÖR_OLUŞTUR") -> "📁 Klasör Açılıyor..."
+                        rawSoFar.contains("ARA") -> "🔍 İnternet Taranıyor..."
+                        rawSoFar.contains("<think>") && !rawSoFar.contains("</think>") -> "🧠 Model Düşünüyor..."
+                        else -> null
+                    }
+
+                    val (streamMain, streamThink) = extractThinkingFromRaw(rawSoFar)
+                    val currentList = _uiState.value.messages.toMutableList()
+                    if (currentList.isNotEmpty()) {
+                        currentList[currentList.lastIndex] = placeholderMsg.copy(
+                            content = streamMain,
+                            thinkingContent = if (preferences.isThinkingEnabled) streamThink else null
+                        )
+                        _uiState.value = _uiState.value.copy(
+                            messages = currentList,
+                            activeToolName = activeTool
+                        )
+                    }
+                }
             )
 
             if (result.isSuccess) {
@@ -233,17 +321,24 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Execute automated actions and append to tool executions
                 val actionTools = executeDetectedActions(mainText)
-                executedTools.addAll(actionTools)
+                val allTools = executedTools + actionTools
 
                 val assistantMsg = ChatMessage(
                     role = MessageRole.ASSISTANT,
                     content = cleanActionSyntax(mainText),
                     thinkingContent = if (preferences.isThinkingEnabled) thinkingText else null,
-                    toolExecutions = executedTools
+                    toolExecutions = allTools
                 )
 
+                val currentList = _uiState.value.messages.toMutableList()
+                if (currentList.isNotEmpty()) {
+                    currentList[currentList.lastIndex] = assistantMsg
+                } else {
+                    currentList.add(assistantMsg)
+                }
+
                 _uiState.value = _uiState.value.copy(
-                    messages = _uiState.value.messages + assistantMsg,
+                    messages = currentList,
                     isGenerating = false,
                     statusMessage = null,
                     activeToolName = null
@@ -256,8 +351,14 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     isError = true,
                     toolExecutions = executedTools
                 )
+                val currentList = _uiState.value.messages.toMutableList()
+                if (currentList.isNotEmpty()) {
+                    currentList[currentList.lastIndex] = errorMsg
+                } else {
+                    currentList.add(errorMsg)
+                }
                 _uiState.value = _uiState.value.copy(
-                    messages = _uiState.value.messages + errorMsg,
+                    messages = currentList,
                     isGenerating = false,
                     statusMessage = null,
                     activeToolName = null
@@ -279,11 +380,21 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun buildWorkspaceSummary(): String {
         return try {
-            val items = fileManager.listItemsInCurrentDirectory()
-            val names = items.map { "${it.name} (${it.itemType.titleTr}, ${it.formattedSize})" }
-            "Mevcut Aktif Klasör: '${fileManager.currentDirectory.name}'\nİçindekiler (${items.size} öge): " + names.joinToString(", ")
+            fileManager.buildFullWorkspaceHierarchy(maxDepth = 3)
         } catch (_: Exception) {
             ""
+        }
+    }
+
+    private fun extractThinkingFromRaw(raw: String): Pair<String, String?> {
+        val thinkRegex = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.IGNORE_CASE)
+        val match = thinkRegex.find(raw)
+        return if (match != null) {
+            val thinking = match.groupValues[1].trim()
+            val cleanMain = raw.replace(match.value, "").trim()
+            cleanMain to thinking
+        } else {
+            raw to null
         }
     }
 
@@ -388,6 +499,36 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             }
+
+            // Action 6: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | soru]
+            val visionRegex = Regex("\\[KOMUT:\\s*GÖRSEL_MODELİ_ÇAĞIR\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\]")
+            visionRegex.findAll(response).forEach { match ->
+                val fileName = match.groupValues[1].trim()
+                val question = match.groupValues[2].trim()
+                val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
+                if (targetFile.exists()) {
+                    val frames = aiClient.extractMediaFrames(targetFile, maxFrames = 3)
+                    if (frames.isNotEmpty()) {
+                        val isVid = targetFile.extension.lowercase() in listOf("mp4", "mkv", "webm", "avi", "mov")
+                        val vRes = aiClient.callVisionModel(
+                            serverUrl = preferences.serverUrl,
+                            visionModelName = preferences.visionModelName,
+                            prompt = question,
+                            base64Images = frames
+                        )
+                        if (vRes.isSuccess) {
+                            tools.add(
+                                ToolExecution(
+                                    toolName = "👁️ 2. Model (Vision: ${preferences.visionModelName})",
+                                    summary = "$fileName (${if (isVid) "Video ${frames.size} kare" else "Görsel"}) 2. modelce analiz edildi",
+                                    inputDetail = "1. Modelin Sorusu: $question\nHedef Dosya: $fileName",
+                                    outputDetail = vRes.getOrThrow()
+                                )
+                            )
+                        }
+                    }
+                }
+            }
         } catch (_: Exception) {}
         return tools
     }
@@ -399,6 +540,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             .replace(Regex("\\[KOMUT:\\s*KLASÖR_OLUŞTUR\\s*\\|\\s*.*?\\]"), "*(Yeni okul klasörü açıldı)*")
             .replace(Regex("\\[KOMUT:\\s*YENİDEN_ADLANDIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(Dosya adı başarıyla güncellendi)*")
             .replace(Regex("\\[KOMUT:\\s*İNDİR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(İndirme işlemi başlatıldı)*")
+            .replace(Regex("\\[KOMUT:\\s*GÖRSEL_MODELİ_ÇAĞIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(2. Model ile görsel/video analizi tamamlandı)*")
     }
 
     fun downloadMedia(url: String, customName: String? = null) {
@@ -433,6 +575,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
     fun saveSettings(
         serverUrl: String,
         modelName: String,
+        visionModelName: String,
         supremePrompt: String,
         isThinking: Boolean,
         isWebSearch: Boolean,
@@ -440,6 +583,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         preferences.serverUrl = serverUrl
         preferences.modelName = modelName
+        preferences.visionModelName = visionModelName
         preferences.supremePrompt = supremePrompt
         preferences.isThinkingEnabled = isThinking
         preferences.isWebSearchEnabled = isWebSearch
@@ -448,6 +592,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(
             serverUrl = preferences.serverUrl,
             modelName = preferences.modelName,
+            visionModelName = preferences.visionModelName,
             supremePrompt = preferences.supremePrompt,
             isThinkingEnabled = preferences.isThinkingEnabled,
             isWebSearchEnabled = preferences.isWebSearchEnabled,
