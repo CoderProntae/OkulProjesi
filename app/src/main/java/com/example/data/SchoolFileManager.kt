@@ -133,6 +133,39 @@ class SchoolFileManager(private val context: Context) {
         }
     }
 
+    suspend fun findFile(name: String): File? = withContext(Dispatchers.IO) {
+        val clean = name.trim().lowercase()
+        // Check current directory first
+        val direct = File(currentDirectory, name)
+        if (direct.exists()) return@withContext direct
+
+        // Deep search in workspace
+        fun searchDir(dir: File): File? {
+            val list = dir.listFiles() ?: return null
+            for (f in list) {
+                if (f.name.equals(name, ignoreCase = true) || f.name.lowercase().contains(clean)) {
+                    return f
+                }
+                if (f.isDirectory) {
+                    val found = searchDir(f)
+                    if (found != null) return found
+                }
+            }
+            return null
+        }
+        searchDir(rootWorkspaceDir)
+    }
+
+    suspend fun updateTextFile(nameOrPath: String, newContent: String): Result<File> = withContext(Dispatchers.IO) {
+        val target = findFile(nameOrPath) ?: File(currentDirectory, sanitizeFileName(nameOrPath))
+        try {
+            target.writeText(newContent, Charsets.UTF_8)
+            Result.success(target)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun rename(target: File, newName: String): Result<File> = withContext(Dispatchers.IO) {
         val cleanName = sanitizeFileName(newName)
         if (cleanName.isBlank()) {

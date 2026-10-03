@@ -1,6 +1,6 @@
 {
   "name": "Okul Dosyaları",
-  "description": "Okul dersleri, dinleme sesleri, videolar ve ders notları için modern dosya ve medya yöneticisi.",
+  "description": "Okul dersleri, dinleme sesleri, videolar, ders notları ve yerel yapay zeka asistanı içeren modern okul çalışma alanı.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
