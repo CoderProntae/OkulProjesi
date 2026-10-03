@@ -157,12 +157,23 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             var attachedContent: String? = null
             if (attached != null) {
                 _uiState.value = _uiState.value.copy(activeToolName = "Dosya İnceleniyor: ${attached.name}")
-                attachedContent = if (!attached.isDirectory) {
+                val ext = attached.extension.lowercase()
+                attachedContent = if (attached.isDirectory) {
+                    val sub = File(attached.path).list()?.filter { !it.startsWith(".") }?.joinToString(", ") ?: "Boş"
+                    "Klasör: ${attached.name}, İçindeki Dosyalar: $sub"
+                } else if (fileManager.isTextFile(File(attached.path))) {
                     fileManager.readText(File(attached.path))
+                } else if (ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac")) {
+                    val associated = fileManager.findAssociatedTranscript(attached.name)
+                    if (associated != null) {
+                        "[DERS SES KAYDI - Dosya: ${attached.name} (${attached.formattedSize})]\nBu ses dosyasıyla ilişkili ders transkripti / notu bulundu:\n$associated"
+                    } else {
+                        "[DERS SES KAYDI - Dosya: ${attached.name} (${attached.formattedSize})]\n(Bu dosya bir ikili ses kaydıdır. Kullanıcı dinleme dersiyle ilgili sorular sorduğunda dinleme stratejileri ve içerik konusunda yardımcı ol.)"
+                    }
                 } else {
-                    val sub = File(attached.path).list()?.joinToString(", ") ?: "Boş"
-                    "Klasör Adı: ${attached.name}, Alt Ögeler: $sub"
+                    "Dosya: ${attached.name} (${attached.itemType.titleTr}, ${attached.formattedSize})"
                 }
+
                 executedTools.add(
                     ToolExecution(
                         toolName = "Dosya İnceleme",
@@ -189,19 +200,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Check if attached item is audio without content, search for associated transcript
-            if (attached != null && attachedContent == null) {
-                if (attached.extension.lowercase() in listOf("mp3", "wav", "m4a", "ogg")) {
-                    val associated = fileManager.findAssociatedTranscript(attached.name)
-                    attachedContent = if (associated != null) {
-                        "Bu ses dosyasıyla ilişkili ders transkripti / notu bulundu:\n$associated"
-                    } else {
-                        "Bu dosya bir ikili ses kaydıdır (${attached.name}, ${attached.formattedSize}). Kullanıcı bu ses dosyası hakkında soru sorduğunda ders içeriği veya transkripti hakkında rehberlik et."
-                    }
-                }
-            }
-
-            // Check if attached item is Image or Video -> Automatically invoke 2. Model (Vision Model)
+            // Check if attached item is Image or Video -> Automatically invoke 2. Model (Vision Model in English)
             if (attached != null && !attached.isDirectory) {
                 val ext = attached.extension.lowercase()
                 if (ext in listOf("jpg", "jpeg", "png", "webp", "mp4", "mkv", "webm", "avi", "mov")) {
@@ -213,9 +212,14 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val frames = aiClient.extractMediaFrames(File(attached.path), maxFrames = 3)
                     if (frames.isNotEmpty()) {
                         val visionPrompt = if (isVideo) {
-                            "Bu video dosyasından (${attached.name}) çıkarılan ${frames.size} adet kareyi bir öğrenci ders asistanı gözüyle detaylıca analiz et: Videoda ne gösteriliyor, hangi deney, slayt, metin, olay veya grafik var? Detaylı bir açıklama raporu hazırla."
+                            "You are an expert visual educator assistant. Analyze these ${frames.size} video keyframes extracted from the file '${attached.name}' in precise detail:\n" +
+                            "1. Describe the key visual content and actions (e.g. science experiment, lecture whiteboard, presentation slides, diagrams).\n" +
+                            "2. Transcribe and extract all visible text, questions, mathematical formulas, labels, and numbers accurately.\n" +
+                            "3. Structure your analysis clearly."
                         } else {
-                            "Bu görseli (${attached.name}) detaylıca incele: Görseldeki matematik formülleri, sorular, el yazıları, ders şemaları ve metinleri eksiksiz oku ve ne ifade ettiğini analiz et."
+                            "You are an expert visual educator assistant. Analyze this educational image/document '${attached.name}' in precise detail:\n" +
+                            "1. Transcribe all visible text, handwritten notes, mathematical equations, questions, and diagrams accurately.\n" +
+                            "2. Explain what is depicted in the image clearly."
                         }
                         val visionResult = aiClient.callVisionModel(
                             serverUrl = preferences.serverUrl,
@@ -229,11 +233,11 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                                 ToolExecution(
                                     toolName = "👁️ 2. Model (Vision: ${preferences.visionModelName})",
                                     summary = "${attached.name} (${if (isVideo) "Video: ${frames.size} kare" else "Fotoğraf/Belge"}) 2. modelce incelendi",
-                                    inputDetail = "Dosya: ${attached.name} (${attached.formattedSize})\nModel: ${preferences.visionModelName}",
+                                    inputDetail = "Dosya: ${attached.name} (${attached.formattedSize})\nModel: ${preferences.visionModelName}\nTalimat: English Visual Inspection",
                                     outputDetail = analysis
                                 )
                             )
-                            attachedContent = "[2. GÖRSEL VE VİDEO MODELİNİN (${preferences.visionModelName}) ANALİZ RAPORU - Dosya: ${attached.name}]:\n$analysis"
+                            attachedContent = "[2. GÖRSEL VE VİDEO MODELİNİN (${preferences.visionModelName}) İNGİLİZCE ANALİZ RAPORU - Dosya: ${attached.name}]:\n$analysis\n\n(YÖNERGE: Yukarıdaki İngilizce görsel analiz raporunu kullanarak kullanıcıya akıcı ve kusursuz Türkçe ile detaylı ders açıklaması, soru çözümü veya not oluştur.)"
                         }
                     }
                 }

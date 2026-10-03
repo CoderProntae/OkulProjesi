@@ -50,11 +50,11 @@ class SchoolFileManager(private val context: Context) {
         private set
 
     init {
-        // 1. First, search and migrate files from any previous versions or public storage
+        // 1. Remove any legacy template sample folders that were automatically seeded
+        cleanupLegacySampleContent()
+        // 2. Search and migrate real user files from any previous versions or public storage
         migrateFromPreviousVersions()
-        // 2. Initialize default school content only if empty
-        ensureInitialSchoolContent()
-        // 3. Keep persistent public mirror updated
+        // 3. Keep persistent public mirror updated with user files
         mirrorToPersistentStorage()
     }
 
@@ -269,8 +269,22 @@ class SchoolFileManager(private val context: Context) {
         }
     }
 
+    fun isTextFile(file: File): Boolean {
+        val ext = file.extension.lowercase()
+        return ext in listOf("txt", "md", "json", "csv", "srt", "lrc", "vtt", "xml", "html", "htm", "py", "kt", "c", "cpp", "js", "java", "ts", "css", "log", "ini", "conf", "sh", "bat", "ps1")
+    }
+
     suspend fun delete(target: File): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
+            // Also delete from persistentBackupDir so it's not restored again
+            val relPath = target.relativeToOrNull(rootWorkspaceDir)?.path
+            if (relPath != null && persistentBackupDir != null) {
+                val mirrorTarget = File(persistentBackupDir, relPath)
+                if (mirrorTarget.exists()) {
+                    if (mirrorTarget.isDirectory) mirrorTarget.deleteRecursively() else mirrorTarget.delete()
+                }
+            }
+
             val success = if (target.isDirectory) {
                 target.deleteRecursively()
             } else {
@@ -283,8 +297,26 @@ class SchoolFileManager(private val context: Context) {
     }
 
     suspend fun readText(file: File): String = withContext(Dispatchers.IO) {
+        if (!file.exists()) return@withContext "Dosya bulunamadı: ${file.name}"
+        if (!isTextFile(file)) {
+            val ext = file.extension.lowercase()
+            return@withContext when {
+                ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac") -> {
+                    val associated = findAssociatedTranscript(file.name)
+                    if (associated != null) {
+                        "Ses Kaydı: ${file.name}\nİlişkili Transkript/Ders Notu:\n$associated"
+                    } else {
+                        "Ses Dosyası: ${file.name} (${file.length() / 1024} KB, İkili Ses Kaydı)"
+                    }
+                }
+                ext in listOf("mp4", "mkv", "webm", "avi", "mov", "3gp") -> "Video Dosyası: ${file.name} (${file.length() / 1024} KB, Video Kaydı)"
+                ext in listOf("jpg", "jpeg", "png", "webp") -> "Görsel Dosyası: ${file.name} (${file.length() / 1024} KB, Fotoğraf)"
+                ext == "pdf" -> "PDF Dokümanı: ${file.name} (${file.length() / 1024} KB)"
+                else -> "İkili Dosya: ${file.name} (${file.extension.uppercase()}, ${file.length() / 1024} KB)"
+            }
+        }
         try {
-            file.readText(Charsets.UTF_8)
+            file.readText(Charsets.UTF_8).take(30000)
         } catch (e: Exception) {
             "Dosya içeriği okunamadı: ${e.localizedMessage}"
         }
@@ -486,185 +518,45 @@ class SchoolFileManager(private val context: Context) {
     }
 
     /**
-     * Initializes default sample folders and realistic files for school use:
-     * English Listening, Math Notes, Physics Labs, Cheat-sheets
+     * Removes any legacy template sample folders (İngilizce Dinleme, Matematik, Fizik)
+     * so that the workspace only ever contains real user files and folders.
      */
-    private fun ensureInitialSchoolContent() {
-        val initializedMarker = File(rootWorkspaceDir, ".initialized")
-        if (initializedMarker.exists()) return
-
+    private fun cleanupLegacySampleContent() {
         try {
-            // 1. İngilizce Dinleme Dosyaları folder
-            val englishDir = File(rootWorkspaceDir, "İngilizce Dinleme (Listening)")
-            if (!englishDir.exists()) englishDir.mkdirs()
-
-            // Generate playable wav files for listening exercises
-            createPlayableWavFile(
-                File(englishDir, "Unit_1_Daily_Routines.wav"),
-                durationSeconds = 6,
-                baseFreq = 440.0
+            val dummyNames = listOf(
+                "İngilizce Dinleme (Listening)",
+                "Matematik ve Geometri",
+                "Fizik ve Fen Bilimleri"
             )
-            createPlayableWavFile(
-                File(englishDir, "Unit_2_School_Life_Listening.wav"),
-                durationSeconds = 8,
-                baseFreq = 523.25
-            )
-
-            File(englishDir, "Ders_Plani_ve_Kelimeler.txt").writeText(
-                """
-                === İNGİLİZCE DİNLEME DERSİ (LISTENING COMPREHENSION) ===
-                
-                Ünite 1: Daily Routines & Study Habits
-                - Vocabulary:
-                  * assignment (ödev)
-                  * curriculum (müfredat)
-                  * lecture (üniversite dersi)
-                  * comprehension (anlama)
-                  * deadline (teslim tarihi)
-                
-                Diyalog Notları:
-                Sarah: "Have you prepared the English listening audio tracks for tomorrow's seminar?"
-                Mark: "Yes, I organized all MP3 files into the School Folder Manager!"
-                
-                Ödev:
-                - Dinleme parçasını 0.75x hızında dinleyip bilinmeyen kelimeleri çıkarın.
-                - Ses kaydındaki ana fikri 3 cümleyle özetleyin.
-                """.trimIndent(),
-                Charsets.UTF_8
-            )
-
-            // 2. Matematik & Geometri folder
-            val mathDir = File(rootWorkspaceDir, "Matematik ve Geometri")
-            if (!mathDir.exists()) mathDir.mkdirs()
-
-            File(mathDir, "Formuller_ve_Teoremler.txt").writeText(
-                """
-                === MATEMATİK & GEOMETRİ FORMÜLLERİ ===
-                
-                1. Trigonometri Temel Özdeşlikler:
-                   - sin²(x) + cos²(x) = 1
-                   - tan(x) = sin(x) / cos(x)
-                   - sin(2x) = 2 · sin(x) · cos(x)
-                   - cos(2x) = cos²(x) - sin²(x)
-                
-                2. Türev Kuralları:
-                   - d/dx [xⁿ] = n · xⁿ⁻¹
-                   - d/dx [f(x) · g(x)] = f'(x)·g(x) + f(x)·g'(x)
-                   - d/dx [sin(x)] = cos(x)
-                
-                3. Üçgende Alan & Pisagor:
-                   - a² + b² = c²
-                   - Alan = (Taban × Yükseklik) / 2
-                """.trimIndent(),
-                Charsets.UTF_8
-            )
-
-            File(mathDir, "Haftalik_Calisma_Programi.txt").writeText(
-                """
-                === HAFTALIK DERS ÇALIŞMA PLANI ===
-                
-                Pazartesi:
-                - 10:00 - 11:30 : İngilizce Dinleme ve Telaffuz çalışması
-                - 14:00 - 16:00 : Matematik Türev uygulamaları ve soru çözümü
-                
-                Çarşamba:
-                - 09:00 - 11:00 : Fizik Deney Raporu hazırlığı
-                - 13:00 - 15:00 : Geometri soru bankası taraması
-                
-                Cuma:
-                - Haftalık konu tekrarları ve dosya düzenleme
-                """.trimIndent(),
-                Charsets.UTF_8
-            )
-
-            // 3. Fen Bilimleri ve Fizik folder
-            val scienceDir = File(rootWorkspaceDir, "Fizik ve Fen Bilimleri")
-            if (!scienceDir.exists()) scienceDir.mkdirs()
-
-            File(scienceDir, "Laboratuvar_Guvenlik_Notlari.txt").writeText(
-                """
-                === FİZİK & KİMYA LABORATUVARI KURALLARI ===
-                
-                1. Laboratuvar önlüğü ve koruyucu gözlük zorunludur.
-                2. Kimyasal maddelerin doğrudan koklanması ve tadılması yasaktır.
-                3. Elektrik devreleri kurulurken güç kaynağı kapalı tutulmalıdır.
-                4. Deney verileri anında not defterine kaydedilmelidir.
-                """.trimIndent(),
-                Charsets.UTF_8
-            )
-
-            initializedMarker.createNewFile()
-        } catch (_: Exception) {
-            // Ignore if initial seeding fails
-        }
-    }
-
-    /**
-     * Synthesizes a real playable 16-bit PCM WAV file so MediaPlayer can play real sound!
-     */
-    private fun createPlayableWavFile(file: File, durationSeconds: Int, baseFreq: Double) {
-        try {
-            val sampleRate = 22050
-            val numSamples = durationSeconds * sampleRate
-            val pcmData = ByteArray(numSamples * 2)
-
-            for (i in 0 until numSamples) {
-                val t = i.toDouble() / sampleRate
-                // Harmonic educational chime melody
-                val freq = when ((t % 2.0).toInt()) {
-                    0 -> baseFreq
-                    else -> baseFreq * 1.25
+            val searchDirs = listOfNotNull(rootWorkspaceDir, persistentBackupDir)
+            for (parent in searchDirs) {
+                for (name in dummyNames) {
+                    val dir = File(parent, name)
+                    if (dir.exists() && dir.isDirectory) {
+                        val files = dir.listFiles()?.map { it.name } ?: emptyList()
+                        val dummyFiles = listOf(
+                            "Unit_1_Daily_Routines.wav",
+                            "Unit_2_School_Life_Listening.wav",
+                            "Ders_Plani_ve_Kelimeler.txt",
+                            "Formuller_ve_Teoremler.txt",
+                            "Haftalik_Calisma_Programi.txt",
+                            "Laboratuvar_Guvenlik_Notlari.txt"
+                        )
+                        // Only delete if it exclusively contains template files
+                        if (files.isEmpty() || files.all { it in dummyFiles }) {
+                            dir.deleteRecursively()
+                        }
+                    }
                 }
-                val sampleValue = (sin(2.0 * Math.PI * freq * t) * 0.4 * 32767.0).toInt().coerceIn(-32768, 32767).toShort()
-                val idx = i * 2
-                pcmData[idx] = (sampleValue.toInt() and 0xFF).toByte()
-                pcmData[idx + 1] = ((sampleValue.toInt() shr 8) and 0xFF).toByte()
-            }
-
-            val totalDataLen = pcmData.size + 36
-            val byteRate = sampleRate * 2
-
-            val header = ByteArray(44)
-            // RIFF header
-            header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
-            header[4] = (totalDataLen and 0xff).toByte()
-            header[5] = ((totalDataLen shr 8) and 0xff).toByte()
-            header[6] = ((totalDataLen shr 16) and 0xff).toByte()
-            header[7] = ((totalDataLen shr 24) and 0xff).toByte()
-            header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
-            // fmt chunk
-            header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
-            header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0 // Subchunk1Size
-            header[20] = 1; header[21] = 0 // AudioFormat (1 = PCM)
-            header[22] = 1; header[23] = 0 // NumChannels (1 = Mono)
-            header[24] = (sampleRate and 0xff).toByte()
-            header[25] = ((sampleRate shr 8) and 0xff).toByte()
-            header[26] = ((sampleRate shr 16) and 0xff).toByte()
-            header[27] = ((sampleRate shr 24) and 0xff).toByte()
-            header[28] = (byteRate and 0xff).toByte()
-            header[29] = ((byteRate shr 8) and 0xff).toByte()
-            header[30] = ((byteRate shr 16) and 0xff).toByte()
-            header[31] = ((byteRate shr 24) and 0xff).toByte()
-            header[32] = 2; header[33] = 0 // BlockAlign
-            header[34] = 16; header[35] = 0 // BitsPerSample
-            // data chunk
-            header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
-            header[40] = (pcmData.size and 0xff).toByte()
-            header[41] = ((pcmData.size shr 8) and 0xff).toByte()
-            header[42] = ((pcmData.size shr 16) and 0xff).toByte()
-            header[43] = ((pcmData.size shr 24) and 0xff).toByte()
-
-            FileOutputStream(file).use { fos ->
-                fos.write(header)
-                fos.write(pcmData)
+                val marker = File(parent, ".initialized")
+                if (marker.exists()) marker.delete()
             }
         } catch (_: Exception) {}
     }
 
     /**
-     * Searches for any previous version directories (e.g. from com.example,
-     * external documents/downloads, or past application IDs) and restores
-     * all folders and files into the current workspace.
+     * Searches for real user files from persistent storage / previous package installs
+     * and migrates them into current workspace.
      */
     fun migrateFromPreviousVersions(): Int {
         var restoredCount = 0
@@ -698,8 +590,18 @@ class SchoolFileManager(private val context: Context) {
                 }
             }
 
+            val dummyNames = listOf(
+                "İngilizce Dinleme (Listening)",
+                "Matematik ve Geometri",
+                "Fizik ve Fen Bilimleri"
+            )
+
             for (srcDir in candidateSourceDirs.distinctBy { it.absolutePath }) {
-                restoredCount += copyRecursivelyWithoutOverwriting(srcDir, rootWorkspaceDir)
+                val files = srcDir.listFiles() ?: continue
+                for (f in files) {
+                    if (f.name in dummyNames) continue
+                    restoredCount += copyRecursivelyWithoutOverwriting(f, File(rootWorkspaceDir, f.name))
+                }
             }
         } catch (_: Exception) {}
         return restoredCount

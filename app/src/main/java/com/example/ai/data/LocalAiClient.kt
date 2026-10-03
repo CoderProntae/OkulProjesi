@@ -105,15 +105,17 @@ class LocalAiClient(
                 if (!workspaceOverview.isNullOrBlank()) {
                     append("\n\n[MEVCUT TAM OKUL ÇALIŞMA ALANI AĞACI]:\n").append(workspaceOverview)
                 }
-                append("\n\n[2. MODEL ENTEGRASYONU - GÖRSEL VE VİDEO UZMANI ($visionModelName)]:")
-                append("\nSistemde görsel (fotoğraf/belge/ödev/el yazısı/grafik) ve video analizi yapabilen 2. bir model ($visionModelName) hazırdır.")
-                append("\nKullanıcı bir görsel veya video hakkında soru sorduğunda ya da bu dosyaları incelemen gerektiğinde şu komutla 2. modeli çağırabilirsin:")
-                append("\n- [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | sorulacak_soru]")
-                append("\n2. model ($visionModelName) video karelerini ve fotoğrafları yüksek çözünürlükte inceleyip sonucu sana aktaracaktır.")
+                append("\n\n[2. MODEL (GÖRSEL VE VİDEO UZMANI - $visionModelName) PROTOKOLÜ]:")
+                append("\nSistemde yüksek çözünürlüklü görsel (fotoğraf/belge/ödev/el yazısı/grafik) ve video analizi yapabilen 2. bir yapay zeka modeli ($visionModelName) hazırdır.")
+                append("\n2. Model, optik karakter tanıma (OCR) ve video anlama işlemlerinde en yüksek performansı İNGİLİZCE (English) verir.")
+                append("\n- Kullanıcı bir görsel veya video hakkında soru sorduğunda ya da bu dosyaları incelemen gerektiğinde 2. modele sorunu İNGİLİZCE olarak şu komutla ilet:")
+                append("\n  [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | Please analyze all visible questions, math formulas, diagrams and text in this file in detail]")
+                append("\n- 2. Model sana detaylı bir İngilizce görsel analiz raporu sunacaktır.")
+                append("\n- SENİN GÖREVİN: 2. Modelin İngilizce analiz raporunu alıp kullanıcıya akıcı, eksiksiz ve kusursuz bir TÜRKÇE ile ders çözümü, notu veya özeti olarak sunmaktır.")
 
                 append("\n\n[EYLEM VE ARAÇ KULLANIM SÖZ DİZİMİ - Kullanıcı okul dosyalarını veya sistemi yönetmeni istediğinde bu komutları kullanabilirsin]:")
                 append("\n- Dosya içeriğini incelemek/okumak için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
-                append("\n- Görsel veya video dosyalarını 2. modele inceletmek için: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | soru]")
+                append("\n- Görsel veya video dosyalarını 2. modele inceletmek için (soruyu İngilizce yaz): [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | English question]")
                 append("\n- Mevcut metin/.txt dosyasını düzenlemek/güncellemek için: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]")
                 append("\n- Yeni ders notu veya dosya oluşturmak için: [KOMUT: NOT_OLUŞTUR | dosya_adi.txt | içerik]")
                 append("\n- Yeni okul klasörü açmak için: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]")
