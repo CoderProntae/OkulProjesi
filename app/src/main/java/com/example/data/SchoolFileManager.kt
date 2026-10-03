@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import com.example.model.FolderAuditData
@@ -14,6 +15,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.math.sin
 
 class SchoolFileManager(private val context: Context) {
@@ -26,12 +29,33 @@ class SchoolFileManager(private val context: Context) {
         dir
     }
 
+    // Public Documents or Download directory which is NEVER deleted on app update/uninstall
+    val persistentBackupDir: File? by lazy {
+        try {
+            val docs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            val d = File(docs, "OkulDizini")
+            if (!d.exists()) d.mkdirs()
+            if (d.exists()) d else {
+                val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val dlDir = File(dl, "OkulDizini")
+                if (!dlDir.exists()) dlDir.mkdirs()
+                if (dlDir.exists()) dlDir else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     var currentDirectory: File = rootWorkspaceDir
         private set
 
     init {
-        // Initialize workspace and sample assets if newly created
+        // 1. First, search and migrate files from any previous versions or public storage
+        migrateFromPreviousVersions()
+        // 2. Initialize default school content only if empty
         ensureInitialSchoolContent()
+        // 3. Keep persistent public mirror updated
+        mirrorToPersistentStorage()
     }
 
     fun getBreadcrumbs(): List<File> {
@@ -572,5 +596,119 @@ class SchoolFileManager(private val context: Context) {
                 fos.write(pcmData)
             }
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Searches for any previous version directories (e.g. from com.example,
+     * external documents/downloads, or past application IDs) and restores
+     * all folders and files into the current workspace.
+     */
+    fun migrateFromPreviousVersions(): Int {
+        var restoredCount = 0
+        try {
+            val candidateSourceDirs = mutableListOf<File>()
+
+            // 1. Check persistent public Documents & Download directory
+            persistentBackupDir?.let { if (it.exists() && it.absolutePath != rootWorkspaceDir.absolutePath) candidateSourceDirs.add(it) }
+            val docs = File("/storage/emulated/0/Documents/OkulDizini")
+            if (docs.exists() && docs.absolutePath != rootWorkspaceDir.absolutePath) candidateSourceDirs.add(docs)
+            val downloads = File("/storage/emulated/0/Download/OkulDizini")
+            if (downloads.exists() && downloads.absolutePath != rootWorkspaceDir.absolutePath) candidateSourceDirs.add(downloads)
+
+            // 2. Check previous internal files directory
+            val internalFiles = File(context.filesDir, "OkulDizini")
+            if (internalFiles.exists() && internalFiles.absolutePath != rootWorkspaceDir.absolutePath) candidateSourceDirs.add(internalFiles)
+
+            // 3. Check Android/data of known past package names
+            val extAndroidData = File("/storage/emulated/0/Android/data")
+            if (extAndroidData.exists() && extAndroidData.isDirectory) {
+                val pastPackages = listOf(
+                    "com.example",
+                    "com.example.myapplication",
+                    "com.aistudio.okuldosyalari.skljwm"
+                )
+                for (pkg in pastPackages) {
+                    val pkgDir = File(extAndroidData, "$pkg/files/OkulDizini")
+                    if (pkgDir.exists() && pkgDir.absolutePath != rootWorkspaceDir.absolutePath) {
+                        candidateSourceDirs.add(pkgDir)
+                    }
+                }
+            }
+
+            for (srcDir in candidateSourceDirs.distinctBy { it.absolutePath }) {
+                restoredCount += copyRecursivelyWithoutOverwriting(srcDir, rootWorkspaceDir)
+            }
+        } catch (_: Exception) {}
+        return restoredCount
+    }
+
+    private fun copyRecursivelyWithoutOverwriting(source: File, target: File): Int {
+        var count = 0
+        if (!source.exists()) return 0
+        if (source.isDirectory) {
+            if (!target.exists()) target.mkdirs()
+            val files = source.listFiles() ?: return 0
+            for (f in files) {
+                count += copyRecursivelyWithoutOverwriting(f, File(target, f.name))
+            }
+        } else {
+            if (!target.exists() || target.length() == 0L) {
+                try {
+                    source.copyTo(target, overwrite = true)
+                    count++
+                } catch (_: Exception) {}
+            }
+        }
+        return count
+    }
+
+    /**
+     * Mirrors all files in rootWorkspaceDir to persistent public storage
+     * so that if the user deletes the app or updates, the files remain safe.
+     */
+    fun mirrorToPersistentStorage() {
+        val dest = persistentBackupDir ?: return
+        try {
+            copyRecursivelyWithoutOverwriting(rootWorkspaceDir, dest)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Creates a full ZIP archive backup of the entire school workspace
+     * in the phone's Download folder.
+     */
+    fun backupWorkspaceToZip(): Result<File> {
+        return try {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadDir.exists()) downloadDir.mkdirs()
+
+            val timestamp = System.currentTimeMillis()
+            val zipFile = File(downloadDir, "OkulDizini_Yedek_$timestamp.zip")
+
+            ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                fun addDirToZip(dir: File, baseDir: File) {
+                    val files = dir.listFiles() ?: return
+                    for (file in files) {
+                        if (file.isDirectory) {
+                            addDirToZip(file, baseDir)
+                        } else {
+                            val relativePath = file.relativeTo(baseDir).path
+                            val entry = ZipEntry(relativePath)
+                            zos.putNextEntry(entry)
+                            FileInputStream(file).use { fis ->
+                                fis.copyTo(zos)
+                            }
+                            zos.closeEntry()
+                        }
+                    }
+                }
+                addDirToZip(rootWorkspaceDir, rootWorkspaceDir)
+            }
+
+            mirrorToPersistentStorage()
+            Result.success(zipFile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

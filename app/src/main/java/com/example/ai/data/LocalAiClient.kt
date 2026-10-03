@@ -175,7 +175,18 @@ class LocalAiClient(
 
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("Model yanıt vermedi: HTTP ${response.code}"))
+                val errBody = response.body?.string().orEmpty()
+                val errorDetail = try {
+                    JSONObject(errBody).optString("error", errBody)
+                } catch (_: Exception) {
+                    errBody
+                }
+                val msg = if (response.code == 404) {
+                    "Model bulunamadı (HTTP 404): '$modelName'.\nOllama uyarısı: $errorDetail\nLütfen ayarlardan bilgisayarınızda yüklü olan modeli seçin."
+                } else {
+                    "Model yanıt vermedi: HTTP ${response.code} ($errorDetail)"
+                }
+                return@withContext Result.failure(Exception(msg))
             }
 
             val respBody = response.body?.string().orEmpty()

@@ -249,6 +249,34 @@ fun AiSettingsDialog(
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
+
+                if (serverStatus.availableModels.isNotEmpty()) {
+                    Text(
+                        text = "Bilgisayarınızda Yüklü Modeller (Seçmek için dokunun):",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        serverStatus.availableModels.forEach { m ->
+                            FilterChip(
+                                selected = modelName == m,
+                                onClick = { modelName = m },
+                                label = { Text(m, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 Text(
                     text = "GTX 1660 Super (6GB VRAM) için önerilen modeller:",
                     style = MaterialTheme.typography.bodySmall,

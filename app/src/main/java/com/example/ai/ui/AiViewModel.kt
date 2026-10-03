@@ -75,7 +75,28 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 serverStatus = _uiState.value.serverStatus.copy(errorMessage = null)
             )
             val status = aiClient.testConnection(preferences.serverUrl)
-            _uiState.value = _uiState.value.copy(serverStatus = status)
+            var newModelName = preferences.modelName
+            var statusMsg: String? = null
+
+            if (status.isConnected && status.availableModels.isNotEmpty()) {
+                val exactMatch = status.availableModels.firstOrNull { it.equals(preferences.modelName, ignoreCase = true) }
+                if (exactMatch != null) {
+                    newModelName = exactMatch
+                    preferences.modelName = exactMatch
+                } else {
+                    val matchingInstalled = status.availableModels.firstOrNull { it.contains("qwen", ignoreCase = true) || it.contains("coder", ignoreCase = true) }
+                        ?: status.availableModels.first()
+                    newModelName = matchingInstalled
+                    preferences.modelName = matchingInstalled
+                    statusMsg = "Bilgisayarınızdaki '$matchingInstalled' modeli otomatik seçildi."
+                }
+            }
+
+            _uiState.value = _uiState.value.copy(
+                serverStatus = status,
+                modelName = newModelName,
+                statusMessage = statusMsg ?: _uiState.value.statusMessage
+            )
         }
     }
 

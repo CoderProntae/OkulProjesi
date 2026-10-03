@@ -385,6 +385,40 @@ class SchoolViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = _uiState.value.copy(statusMessage = null)
     }
 
+    fun backupWorkspace() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val res = fileManager.backupWorkspaceToZip()
+            if (res.isSuccess) {
+                val f = res.getOrThrow()
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    statusMessage = "Tüm dosyalar İndirilenler klasörüne yedeklendi: ${f.name}"
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    statusMessage = "Yedekleme hatası: ${res.exceptionOrNull()?.localizedMessage}"
+                )
+            }
+        }
+    }
+
+    fun recoverPreviousFiles() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            val count = fileManager.migrateFromPreviousVersions()
+            refresh()
+            _uiState.value = _uiState.value.copy(
+                statusMessage = if (count > 0) {
+                    "Önceki sürümlerden $count dosya ve klasör başarıyla geri yüklendi!"
+                } else {
+                    "Tüm dosyalarınız zaten güncel ve mevcut."
+                }
+            )
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         audioController.close()

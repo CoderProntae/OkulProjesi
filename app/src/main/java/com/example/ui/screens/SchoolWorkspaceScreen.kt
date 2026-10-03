@@ -30,17 +30,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DriveFolderUpload
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -53,11 +57,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -103,6 +109,7 @@ fun SchoolWorkspaceScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     var isSearchExpanded by remember { mutableStateOf(false) }
+    var showBackupDialog by remember { mutableStateOf(false) }
 
     // SAF Launchers for importing folders and files from device
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -197,6 +204,17 @@ fun SchoolWorkspaceScreen(
                             Icon(
                                 imageVector = if (uiState.isGrid) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
                                 contentDescription = "Görünüm Değiştir"
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { showBackupDialog = true },
+                            modifier = Modifier.testTag("action_backup_restore")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudSync,
+                                contentDescription = "Yedekle ve Dosyaları Kurtar",
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
 
@@ -564,6 +582,60 @@ fun SchoolWorkspaceScreen(
             item = item,
             onConfirm = { viewModel.delete(item) },
             onDismiss = { viewModel.setItemToDelete(null) }
+        )
+    }
+
+    // Backup & Recovery Dialog
+    if (showBackupDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackupDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.CloudSync, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Dosya Güvenliği & Kurtarma")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Uygulama güncellendiğinde veya silindiğinde okul dosyalarınızın kaybolmaması için kalıcı yedek alabilir veya önceki sürümlerdeki dosyalarınızı tek tıkla geri getirebilirsiniz:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    Button(
+                        onClick = {
+                            showBackupDialog = false
+                            viewModel.recoverPreviousFiles()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Restore, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Önceki Sürüm Dosyalarını Kurtar")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            showBackupDialog = false
+                            viewModel.backupWorkspace()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Archive, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Tüm Dosyaları ZIP Olarak Yedekle")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBackupDialog = false }) {
+                    Text("Kapat")
+                }
+            },
+            shape = RoundedCornerShape(20.dp)
         )
     }
 }
