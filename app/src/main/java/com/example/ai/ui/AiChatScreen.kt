@@ -30,10 +30,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import com.example.ai.model.ToolStatus
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -575,18 +577,35 @@ fun ChatMessageBubble(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Bottom row: timestamp and copy button
+                // Bottom row: timestamp, model badge, and copy button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = timeStr,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        fontSize = 10.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = timeStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            fontSize = 10.sp
+                        )
+                        if (!isUser && !message.modelName.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = "🤖 ${message.modelName}",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
 
                     if (!isUser) {
                         IconButton(
@@ -611,10 +630,22 @@ fun ChatMessageBubble(
 fun ToolExecutionCard(tool: ToolExecution) {
     var expanded by remember { mutableStateOf(false) }
 
+    val statusColor = when (tool.status) {
+        ToolStatus.RUNNING -> Color(0xFFF59E0B) // Amber/Yellow
+        ToolStatus.SUCCESS -> Color(0xFF10B981) // Emerald Green
+        ToolStatus.FAILED -> Color(0xFFEF4444) // Red
+    }
+    val badgeBg = statusColor.copy(alpha = 0.15f)
+    val badgeTextColor = when (tool.status) {
+        ToolStatus.RUNNING -> Color(0xFFD97706)
+        ToolStatus.SUCCESS -> Color(0xFF059669)
+        ToolStatus.FAILED -> Color(0xFFDC2626)
+    }
+
     Card(
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -631,21 +662,36 @@ fun ToolExecutionCard(tool: ToolExecution) {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = Color(0xFF10B981),
-                        modifier = Modifier.size(16.dp)
-                    )
+                    if (tool.status == ToolStatus.RUNNING) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = statusColor
+                        )
+                    } else if (tool.status == ToolStatus.SUCCESS) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = statusColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Cancel,
+                            contentDescription = null,
+                            tint = statusColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(6.dp))
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF10B981).copy(alpha = 0.15f)
+                        color = badgeBg
                     ) {
                         Text(
                             text = tool.toolName,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF059669),
+                            color = badgeTextColor,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
@@ -681,9 +727,39 @@ fun ToolExecutionCard(tool: ToolExecution) {
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(6.dp))
 
+                // Live status banner
+                val statusBannerText = when (tool.status) {
+                    ToolStatus.RUNNING -> "⏳ Ajan işlemi yürütülüyor (Canlı)..."
+                    ToolStatus.SUCCESS -> "✅ Ajan işlemi başarıyla tamamlandı."
+                    ToolStatus.FAILED -> "❌ Ajan işlemi başarısız oldu."
+                }
+                Text(
+                    text = statusBannerText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = badgeTextColor
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (!tool.errorMessage.isNullOrBlank()) {
+                    Text(
+                        text = "Hata / Başarısızlık Nedeni:",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFEF4444)
+                    )
+                    Text(
+                        text = tool.errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
+                        color = Color(0xFFDC2626)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+
                 if (tool.inputDetail.isNotBlank()) {
                     Text(
-                        text = "Girdi / Hedef:",
+                        text = "Girdi / Talimat:",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -700,7 +776,7 @@ fun ToolExecutionCard(tool: ToolExecution) {
 
                 if (tool.outputDetail.isNotBlank()) {
                     Text(
-                        text = "İşlem Detayı / İncelenen İçerik:",
+                        text = "Ajan Çıktısı / Gözlem Sonucu:",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

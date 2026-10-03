@@ -143,7 +143,51 @@ class SchoolFileManager(private val context: Context) {
         }
     }
 
-    suspend fun buildFullWorkspaceHierarchy(maxDepth: Int = 3): String = withContext(Dispatchers.IO) {
+    fun getUserFriendlyPath(file: File): String {
+        return file.absolutePath
+    }
+
+    /**
+     * Extracts genuine physical media metadata (duration, bitrate, ID3 tags)
+     * using Android MediaMetadataRetriever from actual audio files on disk.
+     */
+    fun extractAudioMediaDetails(file: File): String {
+        val sb = StringBuilder()
+        sb.append("Fiziksel Dosya Yolu: ${file.absolutePath}\n")
+        sb.append("Dosya Boyutu: ${file.length()} bayt (${file.length() / 1024} KB)\n")
+        try {
+            val retriever = android.media.MediaMetadataRetriever()
+            retriever.setDataSource(file.absolutePath)
+            val title = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+            val artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            val album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)
+            val durationMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val bitrate = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)
+            val genre = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_GENRE)
+            val date = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DATE)
+
+            val mins = (durationMs / 1000) / 60
+            val secs = (durationMs / 1000) % 60
+            val durationFormatted = String.format("%02d:%02d", mins, secs)
+
+            sb.append("Süre: $durationFormatted (${durationMs}ms)\n")
+            if (!bitrate.isNullOrBlank()) sb.append("Bit Hızı: ${bitrate.toLongOrNull()?.let { it / 1000 } ?: bitrate} kbps\n")
+            if (!title.isNullOrBlank()) sb.append("Parça/Ders Başlığı (ID3): $title\n")
+            if (!artist.isNullOrBlank()) sb.append("Sanatçı/Eğitmen: $artist\n")
+            if (!album.isNullOrBlank()) sb.append("Albüm/Ders Ünitesi: $album\n")
+            if (!genre.isNullOrBlank()) sb.append("Tür/Kategori: $genre\n")
+            if (!date.isNullOrBlank()) sb.append("Tarih/Yıl: $date\n")
+            retriever.release()
+        } catch (_: Exception) {}
+
+        val transcript = findAssociatedTranscript(file.name)
+        if (transcript != null) {
+            sb.append("\n[DİSKTE BULUNAN GERÇEK TRANSKRİPT / DERS METNİ]:\n").append(transcript)
+        }
+        return sb.toString()
+    }
+
+    suspend fun buildFullWorkspaceHierarchy(maxDepth: Int = 10): String = withContext(Dispatchers.IO) {
         val sb = StringBuilder()
         fun traverse(dir: File, depth: Int, indent: String) {
             if (depth > maxDepth) return
@@ -153,7 +197,7 @@ class SchoolFileManager(private val context: Context) {
                 if (f.name.startsWith(".")) continue
                 if (f.isDirectory) {
                     val count = f.listFiles()?.count { !it.name.startsWith(".") } ?: 0
-                    sb.append("$indent📁 ${f.name}/ ($count öge)\n")
+                    sb.append("$indent📁 ${f.name}/ ($count öge) [Fiziksel Yol: ${f.absolutePath}]\n")
                     traverse(f, depth + 1, "$indent  ")
                 } else {
                     val ext = f.extension.lowercase()
@@ -168,14 +212,14 @@ class SchoolFileManager(private val context: Context) {
                     val preview = if (ext in listOf("txt", "md") && f.length() < 200_000) {
                         try {
                             val head = f.readText().lines().filter { it.isNotBlank() }.take(2).joinToString(" | ")
-                            if (head.isNotBlank()) " [Özet: ${head.take(80)}...]" else ""
+                            if (head.isNotBlank()) " [Başlık: ${head.take(100)}]" else ""
                         } catch (_: Exception) { "" }
                     } else ""
-                    sb.append("$indent$icon ${f.name}$preview\n")
+                    sb.append("$indent$icon ${f.name} (${f.length()} bayt) [Yol: ${f.absolutePath}]$preview\n")
                 }
             }
         }
-        sb.append("📁 OkulDizini/ (Kök Çalışma Alanı)\n")
+        sb.append("Kök Dizin: ${rootWorkspaceDir.absolutePath}\n")
         traverse(rootWorkspaceDir, 1, "  ")
         sb.toString()
     }
@@ -297,26 +341,22 @@ class SchoolFileManager(private val context: Context) {
     }
 
     suspend fun readText(file: File): String = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext "Dosya bulunamadı: ${file.name}"
+        if (!file.exists()) return@withContext "Dosya bulunamadı: ${file.absolutePath}"
         if (!isTextFile(file)) {
             val ext = file.extension.lowercase()
             return@withContext when {
                 ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac") -> {
-                    val associated = findAssociatedTranscript(file.name)
-                    if (associated != null) {
-                        "Ses Kaydı: ${file.name}\nİlişkili Transkript/Ders Notu:\n$associated"
-                    } else {
-                        "Ses Dosyası: ${file.name} (${file.length() / 1024} KB, İkili Ses Kaydı)"
-                    }
+                    val details = extractAudioMediaDetails(file)
+                    "[GERÇEK SES DOSYASI VE MEDYA DETAYLARI]\n$details"
                 }
-                ext in listOf("mp4", "mkv", "webm", "avi", "mov", "3gp") -> "Video Dosyası: ${file.name} (${file.length() / 1024} KB, Video Kaydı)"
-                ext in listOf("jpg", "jpeg", "png", "webp") -> "Görsel Dosyası: ${file.name} (${file.length() / 1024} KB, Fotoğraf)"
-                ext == "pdf" -> "PDF Dokümanı: ${file.name} (${file.length() / 1024} KB)"
-                else -> "İkili Dosya: ${file.name} (${file.extension.uppercase()}, ${file.length() / 1024} KB)"
+                ext in listOf("mp4", "mkv", "webm", "avi", "mov", "3gp") -> "Video Dosyası: ${file.absolutePath}\nBoyut: ${file.length()} bayt (${file.length() / 1024} KB)"
+                ext in listOf("jpg", "jpeg", "png", "webp") -> "Görsel Dosyası: ${file.absolutePath}\nBoyut: ${file.length()} bayt (${file.length() / 1024} KB)"
+                ext == "pdf" -> "PDF Dokümanı: ${file.absolutePath}\nBoyut: ${file.length()} bayt (${file.length() / 1024} KB)"
+                else -> "İkili Dosya: ${file.absolutePath} (${file.extension.uppercase()}, ${file.length()} bayt)"
             }
         }
         try {
-            file.readText(Charsets.UTF_8).take(30000)
+            file.readText(Charsets.UTF_8).take(50000)
         } catch (e: Exception) {
             "Dosya içeriği okunamadı: ${e.localizedMessage}"
         }

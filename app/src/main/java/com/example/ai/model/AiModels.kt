@@ -16,11 +16,12 @@ enum class ToolStatus {
 
 data class ToolExecution(
     val id: String = System.currentTimeMillis().toString() + "_" + (0..9999).random(),
-    val toolName: String, // e.g. "Dosya İnceleme", "Not Düzenleme", "Klasör Oluşturma", "İnternet Araması", "Dosya İndirme"
+    val toolName: String, // e.g. "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)", "📁 Dosya İnceleme Ajanı"
     val summary: String,
     val inputDetail: String,
     val outputDetail: String,
-    val status: ToolStatus = ToolStatus.SUCCESS
+    val status: ToolStatus = ToolStatus.SUCCESS,
+    val errorMessage: String? = null
 )
 
 data class ChatMessage(
@@ -33,6 +34,7 @@ data class ChatMessage(
     val isWebSearch: Boolean = false,
     val isStreaming: Boolean = false,
     val isError: Boolean = false,
+    val modelName: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
 

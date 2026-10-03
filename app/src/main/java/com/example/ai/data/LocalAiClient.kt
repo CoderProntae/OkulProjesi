@@ -98,7 +98,9 @@ class LocalAiClient(
                 append("\n\n[SENİN KİMLİĞİN VE ÇALIŞMA ALANI ORTAMI]")
                 append("\nSen kullanıcının Android cihazındaki yerel yapay zeka asistanı ve Okul Dosya Yöneticisisin.")
                 append("\nModel adın: $modelName.")
-                append("\nKESİNLİKLE YASAK: Kullanıcı okul dizini, ödevler, formüller, ses dosyaları veya notlar hakkında soru sorduğunda ASLA 'dosyalara erişimim yok', 'ben sadece bir yapay zekayım', 'sisteminize doğrudan ulaşamam' gibi mazeretler üretme! Sen doğrudan telefonun okul dizini içindesin ve tüm klasörler ile dosyalar sana aşağıda verilmiştir.")
+                append("\n[GERÇEK DOSYA VE DİSK ERİŞİMİ - KESİN KURAL]:")
+                append("\nKullanıcı sana bir dosya eklediğinde veya soru sorduğunda, o dosyanın gerçek fiziksel disk yolu, boyutu, tam içeriği / medya bilgileri sana [KULLANICININ EKLEDİĞİ GERÇEK OKUL DOSYASI] altında doğrudan verilir.")
+                append("\nKESİNLİKLE YASAK: ASLA 'lütfen dosyanızı ekleyin', 'dosyaya erişemiyorum', 'ben sadece bir yapay zekayım' gibi mazeretler üretme! Dosya zaten fiziksel olarak okunmuş ve sana eksiksiz verilmiştir. Hemen kullanıcının istediği transkripti, özetini, soru çözümünü veya notunu üret.")
                 if (isThinkingEnabled) {
                     append("\n\n[DÜŞÜNME MODU AKTİF]: Nihai yanıtını vermeden önce adım adım düşünme sürecini <think>...</think> etiketleri içerisine yaz. Ardından doğrudan nihai yanıtını ve çözümlerini sun.")
                 }
@@ -148,8 +150,13 @@ class LocalAiClient(
             val extraContext = StringBuilder()
 
             if (!attachedFileContent.isNullOrBlank() && attachedItem != null) {
-                extraContext.append("\n\n[KULLANICININ EKLEDİĞİ OKUL DOSYASI]: '${attachedItem.name}' (Tür: ${attachedItem.itemType.titleTr})\nİçerik:\n")
-                extraContext.append(attachedFileContent.take(8000))
+                extraContext.append("\n\n[KULLANICININ EKLEDİĞİ GERÇEK OKUL DOSYASI]:\n")
+                extraContext.append("- Dosya Adı: ${attachedItem.name}\n")
+                extraContext.append("- Gerçek Fiziksel Disk Yolu: ${attachedItem.path}\n")
+                extraContext.append("- Boyut: ${attachedItem.formattedSize} (${attachedItem.sizeBytes} bayt)\n")
+                extraContext.append("- Tür: ${attachedItem.itemType.titleTr}\n")
+                extraContext.append("[DOSYANIN GERÇEK İÇERİĞİ / BİLGİLERİ]:\n")
+                extraContext.append(attachedFileContent.take(50000))
             }
 
             if (!webSearchSummary.isNullOrBlank()) {
