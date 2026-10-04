@@ -18,8 +18,35 @@ import java.io.InputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.sin
+import kotlinx.coroutines.flow.MutableSharedFlow
 
 class SchoolFileManager(private val context: Context) {
+
+    companion object {
+        val fileChangeEvents = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
+    }
+
+    private val deletedItemsFile: File by lazy {
+        File(context.filesDir, "deleted_items_registry.txt")
+    }
+
+    fun markAsDeleted(nameOrPath: String) {
+        try {
+            deletedItemsFile.appendText("${nameOrPath.trim()}\n", Charsets.UTF_8)
+        } catch (_: Exception) {}
+    }
+
+    fun isMarkedAsDeleted(name: String, relPath: String?): Boolean {
+        if (!deletedItemsFile.exists()) return false
+        return try {
+            val lines = deletedItemsFile.readLines().map { it.trim().lowercase() }
+            val n = name.trim().lowercase()
+            val r = relPath?.trim()?.lowercase()
+            lines.contains(n) || (r != null && lines.contains(r))
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     val rootWorkspaceDir: File by lazy {
         val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "OkulDizini")
@@ -136,6 +163,7 @@ class SchoolFileManager(private val context: Context) {
             return@withContext Result.failure(IllegalStateException("Bu isimde bir klasör veya dosya zaten mevcut"))
         }
         if (target.mkdirs()) {
+            fileChangeEvents.tryEmit(Unit)
             mirrorToPersistentStorage()
             Result.success(target)
         } else {
@@ -258,6 +286,7 @@ class SchoolFileManager(private val context: Context) {
         }
         try {
             target.writeText(content, Charsets.UTF_8)
+            fileChangeEvents.tryEmit(Unit)
             Result.success(target)
         } catch (e: Exception) {
             Result.failure(e)
@@ -291,6 +320,7 @@ class SchoolFileManager(private val context: Context) {
         val target = findFile(nameOrPath) ?: File(currentDirectory, sanitizeFileName(nameOrPath))
         try {
             target.writeText(newContent, Charsets.UTF_8)
+            fileChangeEvents.tryEmit(Unit)
             Result.success(target)
         } catch (e: Exception) {
             Result.failure(e)
@@ -299,8 +329,11 @@ class SchoolFileManager(private val context: Context) {
 
     suspend fun delete(target: File): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            // Also delete from all persistent backup mirrors so it never resurrects
             val relPath = target.relativeToOrNull(rootWorkspaceDir)?.path
+            markAsDeleted(target.name)
+            if (relPath != null) markAsDeleted(relPath)
+
+            // Also delete from all persistent backup mirrors so it never resurrects
             if (relPath != null) {
                 val mirrorLocations = listOfNotNull(
                     persistentBackupDir,
@@ -323,10 +356,23 @@ class SchoolFileManager(private val context: Context) {
             } else {
                 target.delete()
             }
-            if (success) Result.success(true) else Result.failure(Exception("Dosya silinemedi"))
+            if (success) {
+                fileChangeEvents.tryEmit(Unit)
+                Result.success(true)
+            } else {
+                Result.failure(Exception("Dosya silinemedi"))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun deleteFileByName(name: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        val target = findFile(name) ?: File(currentDirectory, name)
+        if (!target.exists()) {
+            return@withContext Result.failure(Exception("Dosya çalışma alanında bulunamadı: $name"))
+        }
+        delete(target)
     }
 
     suspend fun rename(target: File, newName: String): Result<File> = withContext(Dispatchers.IO) {
@@ -341,6 +387,7 @@ class SchoolFileManager(private val context: Context) {
 
         val oldRelPath = target.relativeToOrNull(rootWorkspaceDir)?.path
         if (target.renameTo(dest)) {
+            fileChangeEvents.tryEmit(Unit)
             // Update mirrors
             if (oldRelPath != null) {
                 val mirrorLocations = listOfNotNull(
@@ -669,7 +716,7 @@ class SchoolFileManager(private val context: Context) {
             for (srcDir in candidateSourceDirs.distinctBy { it.absolutePath }) {
                 val files = srcDir.listFiles() ?: continue
                 for (f in files) {
-                    if (f.name in dummyNames) continue
+                    if (f.name in dummyNames || isMarkedAsDeleted(f.name, null)) continue
                     restoredCount += copyRecursivelyWithoutOverwriting(f, File(rootWorkspaceDir, f.name))
                 }
             }
@@ -679,7 +726,7 @@ class SchoolFileManager(private val context: Context) {
 
     private fun copyRecursivelyWithoutOverwriting(source: File, target: File): Int {
         var count = 0
-        if (!source.exists()) return 0
+        if (!source.exists() || isMarkedAsDeleted(source.name, null)) return 0
         if (source.isDirectory) {
             if (!target.exists()) {
                 target.mkdirs()

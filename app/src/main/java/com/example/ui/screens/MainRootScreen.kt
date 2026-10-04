@@ -16,6 +16,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -38,6 +39,12 @@ fun MainRootScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val audioState by schoolViewModel.audioState.collectAsState()
     val schoolUiState by schoolViewModel.uiState.collectAsState()
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 0) {
+            schoolViewModel.refresh()
+        }
+    }
 
     Scaffold(
         bottomBar = {

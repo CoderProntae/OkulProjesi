@@ -60,6 +60,11 @@ class SchoolViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         refresh()
+        viewModelScope.launch {
+            SchoolFileManager.fileChangeEvents.collect {
+                refresh()
+            }
+        }
     }
 
     fun refresh() {

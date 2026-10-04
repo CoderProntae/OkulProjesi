@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import com.example.ai.data.ChatSession
+import com.example.ai.data.ChatSessionInfo
+import com.example.ai.data.ChatSessionManager
 
 data class AiUiState(
     val messages: List<ChatMessage> = emptyList(),
@@ -33,10 +36,14 @@ data class AiUiState(
     val downloadProgress: Int? = null,
     val showSettingsDialog: Boolean = false,
     val showAttachmentPicker: Boolean = false,
+    val showChatHistorySheet: Boolean = false,
+    val currentSessionId: String = "",
+    val currentSessionTitle: String = "Yeni Sohbet",
+    val sessionsList: List<ChatSessionInfo> = emptyList(),
     val availableSchoolFiles: List<SchoolItem> = emptyList(),
     val serverUrl: String = "",
     val modelName: String = "",
-    val visionModelName: String = "minicpm-v",
+    val visionModelName: String = "minicpm-v:latest",
     val visionServerUrl: String = "",
     val audioServerUrl: String = "http://192.168.1.100:8000",
     val supremePrompt: String = "",
@@ -52,6 +59,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
     private val webSearchEngine = WebSearchEngine()
     private val mediaDownloader = MediaDownloader()
     val fileManager = SchoolFileManager(application)
+    val sessionManager = ChatSessionManager(application)
 
     private val _uiState = MutableStateFlow(
         AiUiState(
@@ -64,18 +72,147 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             isThinkingEnabled = preferences.isThinkingEnabled,
             isWebSearchEnabled = preferences.isWebSearchEnabled,
             temperature = preferences.temperature,
-            messages = listOf(
-                ChatMessage(
-                    role = MessageRole.ASSISTANT,
-                    content = "Merhaba! Ben yerel yapay zeka asistanınızım. Bilgisayarınızdaki yerel model üzerinden tamamen özel, sansürsüz ve cihaz içi çalışıyorum.\n\nOkul dizininizdeki notları ve .txt dosyalarını düzenleyebilir, yeni klasörler açabilir, dosya oluşturabilir, internetten araştırmalar yapabilir ve video/ders materyalleri indirebilirim. Hangi araçları kullandığımı her yanıtta canlı olarak görebilir ve genişletebilirsiniz. Nasıl yardımcı olabilirim?"
-                )
-            )
+            messages = emptyList()
         )
     )
     val uiState: StateFlow<AiUiState> = _uiState.asStateFlow()
 
     init {
+        loadSessions()
         testServerConnection()
+    }
+
+    private fun createWelcomeMessage(): ChatMessage {
+        return ChatMessage(
+            role = MessageRole.ASSISTANT,
+            content = "Merhaba! Ben yerel yapay zeka asistanınız ve okul çalışma ortamınızın baş danışmanıyım.\n\n" +
+                "🎙️ **Whisper Ses Döküm Ajanı**: Ses kayıtlarınızı doğrudan transkript eder.\n" +
+                "👁️ **2. Model (MiniCPM-V Görsel Ajanı)**: Resimleri, soruları ve ders videolarını analiz eder.\n" +
+                "📁 **Canlı Disk Ajanı**: Dosya okur, not oluşturur, metin düzenler ve dosyaları siler.\n" +
+                "🌐 **İnternet Arama Ajanı**: Canlı web taraması yapar.\n" +
+                "📝 **Sınav & Test Simülatörü**: Derslerinizden anında deneme sınavı üretir.\n\n" +
+                "Üstteki 📚 Sohbetler menüsünden geçmiş tüm oturumlarınıza dilediğiniz an erişebilirsiniz. Nasıl yardımcı olabilirim?"
+        )
+    }
+
+    fun loadSessions() {
+        viewModelScope.launch {
+            val sessions = sessionManager.listSessions()
+            if (sessions.isEmpty()) {
+                val newSession = ChatSession(title = "Yeni Sohbet")
+                sessionManager.saveSession(newSession)
+                _uiState.value = _uiState.value.copy(
+                    currentSessionId = newSession.id,
+                    currentSessionTitle = newSession.title,
+                    sessionsList = listOf(
+                        ChatSessionInfo(
+                            id = newSession.id,
+                            title = newSession.title,
+                            createdAt = newSession.createdAt,
+                            updatedAt = newSession.updatedAt,
+                            messageCount = 0,
+                            previewText = ""
+                        )
+                    ),
+                    messages = listOf(createWelcomeMessage())
+                )
+            } else {
+                val latestInfo = sessions.first()
+                val latest = sessionManager.loadSession(latestInfo.id)
+                val msgs = if (latest != null && latest.messages.isNotEmpty()) latest.messages else listOf(createWelcomeMessage())
+                _uiState.value = _uiState.value.copy(
+                    currentSessionId = latestInfo.id,
+                    currentSessionTitle = latestInfo.title,
+                    sessionsList = sessions,
+                    messages = msgs
+                )
+            }
+        }
+    }
+
+    fun startNewChat() {
+        viewModelScope.launch {
+            val newSession = ChatSession(title = "Yeni Sohbet")
+            sessionManager.saveSession(newSession)
+            val updatedList = sessionManager.listSessions()
+            _uiState.value = _uiState.value.copy(
+                currentSessionId = newSession.id,
+                currentSessionTitle = newSession.title,
+                sessionsList = updatedList,
+                messages = listOf(createWelcomeMessage()),
+                attachedItem = null,
+                showChatHistorySheet = false
+            )
+        }
+    }
+
+    fun selectChatSession(id: String) {
+        viewModelScope.launch {
+            val session = sessionManager.loadSession(id)
+            if (session != null) {
+                _uiState.value = _uiState.value.copy(
+                    currentSessionId = session.id,
+                    currentSessionTitle = session.title,
+                    messages = if (session.messages.isNotEmpty()) session.messages else listOf(createWelcomeMessage()),
+                    attachedItem = null,
+                    showChatHistorySheet = false
+                )
+            }
+        }
+    }
+
+    fun deleteChatSession(id: String) {
+        viewModelScope.launch {
+            sessionManager.deleteSession(id)
+            val updatedList = sessionManager.listSessions()
+            if (_uiState.value.currentSessionId == id) {
+                if (updatedList.isNotEmpty()) {
+                    selectChatSession(updatedList.first().id)
+                } else {
+                    startNewChat()
+                }
+            } else {
+                _uiState.value = _uiState.value.copy(sessionsList = updatedList)
+            }
+        }
+    }
+
+    fun setShowChatHistorySheet(show: Boolean) {
+        _uiState.value = _uiState.value.copy(showChatHistorySheet = show)
+        if (show) {
+            viewModelScope.launch {
+                val list = sessionManager.listSessions()
+                _uiState.value = _uiState.value.copy(sessionsList = list)
+            }
+        }
+    }
+
+    private fun saveCurrentSession(messages: List<ChatMessage>) {
+        val sId = _uiState.value.currentSessionId
+        if (sId.isBlank()) return
+        var title = _uiState.value.currentSessionTitle
+        if (title == "Yeni Sohbet") {
+            val firstUser = messages.firstOrNull { it.role == MessageRole.USER }
+            if (firstUser != null && firstUser.content.isNotBlank()) {
+                title = firstUser.content.take(35).replace("\n", " ").trim()
+                if (firstUser.attachedFile != null) {
+                    title = "📎 ${firstUser.attachedFile.name}: $title"
+                }
+                _uiState.value = _uiState.value.copy(currentSessionTitle = title)
+            }
+        }
+        viewModelScope.launch {
+            sessionManager.saveSession(
+                ChatSession(
+                    id = sId,
+                    title = title,
+                    updatedAt = System.currentTimeMillis(),
+                    messages = messages
+                )
+            )
+            val list = sessionManager.listSessions()
+            _uiState.value = _uiState.value.copy(sessionsList = list)
+        }
     }
 
     fun testServerConnection() {
@@ -373,14 +510,23 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
 
-                messageBlocks.clear()
+                val existingTools = messageBlocks.mapNotNull { it.tool }
+                val mergedBlocks = mutableListOf<MessageBlock>()
                 if (!thinkingText.isNullOrBlank()) {
-                    messageBlocks.add(MessageBlock(type = BlockType.THINKING, text = thinkingText))
+                    mergedBlocks.add(MessageBlock(type = BlockType.THINKING, text = thinkingText))
                 }
-                messageBlocks.addAll(parsedBlocks)
+                // Keep earlier tools (e.g. Whisper that ran at upload time)
+                for (t in existingTools) {
+                    if (parsedBlocks.none { it.tool?.summary == t.summary }) {
+                        mergedBlocks.add(MessageBlock(type = BlockType.TOOL, tool = t))
+                    }
+                }
+                mergedBlocks.addAll(parsedBlocks)
+                messageBlocks.clear()
+                messageBlocks.addAll(mergedBlocks)
 
                 // If tools were executed, do a follow-up synthesis call so the model gives the complete final answer
-                val executedTools = parsedBlocks.mapNotNull { it.tool }
+                val executedTools = messageBlocks.mapNotNull { it.tool }
                 if (executedTools.isNotEmpty()) {
                     val toolResultsSynthesis = executedTools.joinToString("\n\n") { tool ->
                         "[ARAÇ ÇIKTISI: ${tool.toolName}]:\n${tool.outputDetail}"
@@ -434,6 +580,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     statusMessage = null,
                     activeToolName = null
                 )
+                saveCurrentSession(_uiState.value.messages)
             } else {
                 val err = result.exceptionOrNull()?.localizedMessage ?: "Bilinmeyen hata"
                 val errorMsg = ChatMessage(
@@ -592,7 +739,26 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val targetFile = fileManager.findFile(fileName) ?: (if (attachedItem != null) File(attachedItem.path) else File(fileManager.currentDirectory, fileName))
                     val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
 
-                    val isVid = targetFile.extension.lowercase() in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    val ext = targetFile.extension.lowercase()
+                    val isAudio = ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac")
+                    val isText = fileManager.isTextFile(targetFile)
+
+                    if (isAudio) {
+                        val rejectedTool = ToolExecution(
+                            toolName = "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)",
+                            summary = "2. Model (Görsel Ajanı) ses dosyası için çağrılamaz",
+                            inputDetail = "Dosya: $friendlyPath (Ses Dosyası)",
+                            outputDetail = "UYARI: '$fileName' bir ses dosyasıdır. 2. Model yalnızca resim ve video analiz eder. Ses transkripti Whisper tarafından zaten çıkarılmıştır.",
+                            status = ToolStatus.FAILED,
+                            errorMessage = "Ses dosyaları 2. model ile işlenemez"
+                        )
+                        blocks.add(MessageBlock(type = BlockType.TOOL, tool = rejectedTool))
+                        onBlockUpdate()
+                        lastIndex = match.range.last + 1
+                        continue
+                    }
+
+                    val isVid = ext in listOf("mp4", "mkv", "webm", "avi", "mov")
                     val runningTool = ToolExecution(
                         toolName = "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)",
                         summary = "'$fileName' 2. modelce analiz ediliyor...",
@@ -634,6 +800,169 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                             outputDetail = "Dosya mevcut değil veya kilit kare çıkarılamadı",
                             status = ToolStatus.FAILED,
                             errorMessage = "Kare çıkarılamadı"
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "SES_DÖKÜMÜ" -> {
+                    val fileName = args.getOrNull(0) ?: attachedItem?.name ?: "ses.mp3"
+                    val targetFile = fileManager.findFile(fileName) ?: (if (attachedItem != null) File(attachedItem.path) else File(fileManager.currentDirectory, fileName))
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "🎙️ Whisper Ses Döküm Ajanı",
+                        summary = "'$fileName' ses dökümü yapılıyor...",
+                        inputDetail = "Hedef: $friendlyPath\nSunucu: ${preferences.audioServerUrl}",
+                        outputDetail = "Whisper modeli ses dosyasını dinliyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val toolResult = if (targetFile.exists()) {
+                        val audioRes = aiClient.processRawAudioInput(
+                            serverUrl = preferences.serverUrl,
+                            audioFile = targetFile,
+                            audioServerUrl = preferences.audioServerUrl
+                        )
+                        if (audioRes.isSuccess) {
+                            val transcript = audioRes.getOrThrow()
+                            runningTool.copy(
+                                summary = "'$fileName' transkripti tamamlandı (${transcript.length} karakter)",
+                                outputDetail = transcript,
+                                status = ToolStatus.SUCCESS
+                            )
+                        } else {
+                            val err = audioRes.exceptionOrNull()?.localizedMessage ?: "Ses çözülemedi"
+                            runningTool.copy(
+                                summary = "Ses dökümü başarısız oldu",
+                                outputDetail = "Hata: $err",
+                                status = ToolStatus.FAILED,
+                                errorMessage = err
+                            )
+                        }
+                    } else {
+                        runningTool.copy(
+                            summary = "Ses dosyası bulunamadı",
+                            outputDetail = "Dosya diskte mevcut değil: $friendlyPath",
+                            status = ToolStatus.FAILED,
+                            errorMessage = "Dosya bulunamadı"
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "DOSYA_SİL" -> {
+                    val fileName = args.getOrNull(0) ?: ""
+                    val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "🗑️ Dosya Silme Ajanı",
+                        summary = "'$fileName' dosyası diskten siliniyor...",
+                        inputDetail = "Hedef: $friendlyPath",
+                        outputDetail = "Fiziksel depolamadan kalıcı olarak siliniyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val delRes = fileManager.deleteFileByName(fileName)
+                    val toolResult = if (delRes.isSuccess) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' diskten silindi")
+                        runningTool.copy(
+                            summary = "'$fileName' dosyası başarıyla silindi",
+                            outputDetail = "Fiziksel dosya silindi ve canlı depolama güncellendi.",
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        val err = delRes.exceptionOrNull()?.localizedMessage ?: "Silinemedi"
+                        runningTool.copy(
+                            summary = "'$fileName' silinemedi",
+                            outputDetail = "Hata: $err",
+                            status = ToolStatus.FAILED,
+                            errorMessage = err
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "DOSYA_OKU" -> {
+                    val fileName = args.getOrNull(0) ?: ""
+                    val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "📖 Dosya Okuma Ajanı",
+                        summary = "'$fileName' okunuyor...",
+                        inputDetail = "Hedef: $friendlyPath",
+                        outputDetail = "İçerik okunuyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val toolResult = if (targetFile.exists()) {
+                        val text = fileManager.readText(targetFile)
+                        runningTool.copy(
+                            summary = "'$fileName' başarıyla okundu (${text.length} karakter)",
+                            outputDetail = text.take(3000),
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        runningTool.copy(
+                            summary = "Dosya bulunamadı: $fileName",
+                            outputDetail = "Dosya diskte mevcut değil",
+                            status = ToolStatus.FAILED,
+                            errorMessage = "Dosya bulunamadı"
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "TEST_OLUŞTUR" -> {
+                    val lessonName = args.getOrNull(0) ?: "Deneme_Sinavi"
+                    val count = args.getOrNull(1) ?: "10"
+                    val testContent = args.getOrNull(2) ?: ""
+                    val fileName = "${lessonName.replace(" ", "_")}_Test.txt"
+                    val targetFile = File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "📝 Sınav & Test Simülatörü",
+                        summary = "'$fileName' deneme sınavı hazırlanıyor...",
+                        inputDetail = "Ders: $lessonName | Soru Sayısı: $count\nHedef: $friendlyPath",
+                        outputDetail = "Sorular ve cevap anahtarı çalışma alanına kaydediliyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val fullContent = "=== $lessonName DENEME SINAVI ($count Soru) ===\nOluşturulma: ${java.util.Date()}\n\n$testContent"
+                    val createRes = fileManager.createTextFile(fileName, fullContent)
+                    val toolResult = if (createRes.isSuccess) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' sınav testi oluşturuldu")
+                        runningTool.copy(
+                            summary = "'$fileName' sınav testi başarıyla kaydedildi",
+                            outputDetail = "Test İçeriği:\n${fullContent.take(800)}...",
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        val err = createRes.exceptionOrNull()?.localizedMessage ?: "Kaydedilemedi"
+                        runningTool.copy(
+                            summary = "Sınav oluşturulamadı",
+                            outputDetail = "Hata: $err",
+                            status = ToolStatus.FAILED,
+                            errorMessage = err
                         )
                     }
                     blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
@@ -921,7 +1250,11 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
     private fun cleanActionSyntax(raw: String): String {
         return raw
             .replace(Regex("\\[KOMUT:\\s*(?:NOT_OLUŞTUR|DOSYA_OLUŞTUR)\\s*\\|\\s*.*?\\s*\\|\\s*[\\s\\S]*?\\]"), "*(Ders notu okul klasörünüze otomatik kaydedildi)*")
+            .replace(Regex("\\[KOMUT:\\s*TEST_OLUŞTUR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\s*\\|\\s*[\\s\\S]*?\\]"), "*(Sınav testi çalışma alanına kaydedildi)*")
             .replace(Regex("\\[KOMUT:\\s*DOSYA_İNCELE\\s*\\|\\s*.*?\\]"), "*(Dosya incelendi)*")
+            .replace(Regex("\\[KOMUT:\\s*SES_DÖKÜMÜ\\s*\\|\\s*.*?\\]"), "*(Ses dökümü tamamlandı)*")
+            .replace(Regex("\\[KOMUT:\\s*DOSYA_SİL\\s*\\|\\s*.*?\\]"), "*(Dosya silindi)*")
+            .replace(Regex("\\[KOMUT:\\s*DOSYA_OKU\\s*\\|\\s*.*?\\]"), "*(Dosya okundu)*")
             .replace(Regex("\\[KOMUT:\\s*METİN_DÜZENLE\\s*\\|\\s*.*?\\s*\\|\\s*[\\s\\S]*?\\]"), "*(Dosya içeriği başarıyla güncellendi)*")
             .replace(Regex("\\[KOMUT:\\s*KLASÖR_OLUŞTUR\\s*\\|\\s*.*?\\]"), "*(Yeni okul klasörü açıldı)*")
             .replace(Regex("\\[KOMUT:\\s*YENİDEN_ADLANDIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(Dosya adı başarıyla güncellendi)*")
