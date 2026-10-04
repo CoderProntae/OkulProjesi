@@ -351,6 +351,45 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 messageBlocks.addAll(parsedBlocks)
 
+                // If tools were executed, do a follow-up synthesis call so the model gives the complete final answer
+                val executedTools = parsedBlocks.mapNotNull { it.tool }
+                if (executedTools.isNotEmpty()) {
+                    val toolResultsSynthesis = executedTools.joinToString("\n\n") { tool ->
+                        "### [${tool.toolName} - Sonuç]:\n${tool.outputDetail}"
+                    }
+                    val followUpSystem = preferences.supremePrompt + "\n\n" +
+                        "Aşağıdaki araçlar başarıyla çalıştırıldı ve sonuçları alındı. Şimdi bu sonuçları kullanarak kullanıcının asıl sorusunu eksiksiz, samimi, ders odaklı ve akıcı Türkçe ile nihai yanıta bağla:\n$toolResultsSynthesis"
+
+                    val followUpMessages = _uiState.value.messages.dropLast(1).toMutableList().apply {
+                        add(ChatMessage(role = MessageRole.USER, content = "Araç sonuçlarına göre analizi tamamla ve cevabımı ver."))
+                    }
+
+                    val synthBlockIndex = messageBlocks.size
+                    messageBlocks.add(MessageBlock(type = BlockType.TEXT, text = "\n\nSonuçlar derleniyor..."))
+                    updateAssistantState(statusMsg = "Model araç sonuçlarını analiz ediyor...", activeTool = "🧠 Nihai Yanıt")
+
+                    val synthAccum = StringBuilder()
+                    val synthResult = aiClient.sendChat(
+                        serverUrl = preferences.serverUrl,
+                        modelName = activeModel,
+                        visionModelName = activeVisionModel,
+                        supremePrompt = followUpSystem,
+                        messages = followUpMessages,
+                        temperature = preferences.temperature,
+                        isThinkingEnabled = preferences.isThinkingEnabled,
+                        onChunk = { chunk ->
+                            synthAccum.append(chunk)
+                            val clean = cleanActionSyntax(synthAccum.toString())
+                            messageBlocks[synthBlockIndex] = MessageBlock(type = BlockType.TEXT, text = clean)
+                            updateAssistantState()
+                        }
+                    )
+                    if (synthResult.isSuccess) {
+                        val (finalMain, _) = synthResult.getOrThrow()
+                        messageBlocks[synthBlockIndex] = MessageBlock(type = BlockType.TEXT, text = cleanActionSyntax(finalMain))
+                    }
+                }
+
                 updateAssistantState(statusMsg = null, activeTool = null)
 
                 _uiState.value = _uiState.value.copy(
@@ -463,11 +502,38 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     onBlockUpdate()
 
                     val toolResult = if (targetFile.exists()) {
-                        val content = fileManager.readText(targetFile)
+                        val isAudio = targetFile.extension.lowercase() in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac")
+                        val isVideo = targetFile.extension.lowercase() in listOf("mp4", "mkv", "webm", "avi", "mov")
+
+                        val content = if (isAudio) {
+                            val audioRes = aiClient.processRawAudioInput(
+                                serverUrl = preferences.serverUrl,
+                                audioFile = targetFile,
+                                audioServerUrl = preferences.audioServerUrl
+                            )
+                            if (audioRes.isSuccess) {
+                                "[Whisper Transkripti]:\n" + audioRes.getOrThrow()
+                            } else {
+                                fileManager.extractAudioMediaDetails(targetFile)
+                            }
+                        } else if (isVideo) {
+                            val frames = aiClient.extractMediaFrames(targetFile, maxFrames = 3)
+                            val vRes = aiClient.callVisionModel(
+                                serverUrl = preferences.effectiveVisionServerUrl,
+                                visionModelName = preferences.visionModelName,
+                                prompt = "Analyze this video in detail",
+                                base64Images = frames,
+                                fallbackModelName = preferences.modelName
+                            )
+                            if (vRes.isSuccess) "[2. Model Görsel Raporu]:\n" + vRes.getOrThrow() else fileManager.extractAudioMediaDetails(targetFile)
+                        } else {
+                            fileManager.readText(targetFile)
+                        }
+
                         runningTool.copy(
                             summary = "'$fileName' dosyası başarıyla incelendi",
                             inputDetail = "Hedef: $friendlyPath (${targetFile.length() / 1024} KB)",
-                            outputDetail = content.take(2000),
+                            outputDetail = content.take(3000),
                             status = ToolStatus.SUCCESS
                         )
                     } else {

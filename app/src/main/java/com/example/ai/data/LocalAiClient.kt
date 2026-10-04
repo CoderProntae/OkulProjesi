@@ -362,24 +362,18 @@ class LocalAiClient(
         val startTime = System.currentTimeMillis()
         try {
             val request = Request.Builder()
-                .url("$cleanUrl/v1/models")
+                .url("$cleanUrl/openapi.json")
                 .build()
             val response = client.newCall(request).execute()
             val latency = System.currentTimeMillis() - startTime
-            if (response.isSuccessful) {
+            if (response.isSuccessful || response.code in listOf(200, 404, 405)) {
                 AiServerStatus(
                     isConnected = true,
                     latencyMs = latency,
-                    availableModels = listOf("Whisper (Aktif ve Hazır)")
+                    availableModels = listOf("Faster-Whisper (Aktif ve Hazır)")
                 )
             } else {
-                val rootReq = Request.Builder().url(cleanUrl).build()
-                val rootResp = client.newCall(rootReq).execute()
-                if (rootResp.isSuccessful || rootResp.code in listOf(200, 404, 405)) {
-                    AiServerStatus(isConnected = true, latencyMs = latency, availableModels = listOf("Whisper Servisi Hazır"))
-                } else {
-                    AiServerStatus(isConnected = false, errorMessage = "Whisper HTTP ${response.code}")
-                }
+                AiServerStatus(isConnected = false, errorMessage = "Whisper HTTP ${response.code}")
             }
         } catch (e: Exception) {
             AiServerStatus(isConnected = false, errorMessage = "Whisper bağlantı hatası: ${e.localizedMessage}")
@@ -414,12 +408,13 @@ class LocalAiClient(
 
         // Try standard Whisper endpoint on all candidates
         for (targetUrl in urlsToTry) {
+            // Attempt 1: response_format="json" with model
             try {
                 val requestBody = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", audioFile.name, audioFile.asRequestBody(mediaType))
-                    .addFormDataPart("model", "whisper")
-                    .addFormDataPart("response_format", "text")
+                    .addFormDataPart("model", "Systran/faster-whisper-small")
+                    .addFormDataPart("response_format", "json")
                     .build()
 
                 val request = Request.Builder()
@@ -429,9 +424,55 @@ class LocalAiClient(
 
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
-                    val transcript = response.body?.string().orEmpty().trim()
-                    if (transcript.isNotBlank()) {
-                        return@withContext Result.success(transcript)
+                    val rawBody = response.body?.string().orEmpty().trim()
+                    val cleanText = parseTranscriptText(rawBody)
+                    if (cleanText.isNotBlank()) {
+                        return@withContext Result.success(cleanText)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // Attempt 2: ONLY file parameter (FastAPI uses its own default loaded model and json response)
+            try {
+                val simpleBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody(mediaType))
+                    .build()
+
+                val simpleReq = Request.Builder()
+                    .url("$targetUrl/v1/audio/transcriptions")
+                    .post(simpleBody)
+                    .build()
+
+                val simpleResp = client.newCall(simpleReq).execute()
+                if (simpleResp.isSuccessful) {
+                    val rawBody = simpleResp.body?.string().orEmpty().trim()
+                    val cleanText = parseTranscriptText(rawBody)
+                    if (cleanText.isNotBlank()) {
+                        return@withContext Result.success(cleanText)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // Attempt 3: model="whisper" or model="whisper-1" (OpenAI standard)
+            try {
+                val oaiBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody(mediaType))
+                    .addFormDataPart("model", "whisper-1")
+                    .build()
+
+                val oaiReq = Request.Builder()
+                    .url("$targetUrl/v1/audio/transcriptions")
+                    .post(oaiBody)
+                    .build()
+
+                val oaiResp = client.newCall(oaiReq).execute()
+                if (oaiResp.isSuccessful) {
+                    val rawBody = oaiResp.body?.string().orEmpty().trim()
+                    val cleanText = parseTranscriptText(rawBody)
+                    if (cleanText.isNotBlank()) {
+                        return@withContext Result.success(cleanText)
                     }
                 }
             } catch (_: Exception) {}
@@ -471,6 +512,20 @@ class LocalAiClient(
         }
 
         Result.failure(Exception("Yerel Whisper veya Ses Modeli (port 8000/11435) yanıt vermedi."))
+    }
+
+    private fun parseTranscriptText(rawBody: String): String {
+        val trimmed = rawBody.trim()
+        if (trimmed.isBlank()) return ""
+        if (trimmed.startsWith("{")) {
+            try {
+                val json = JSONObject(trimmed)
+                if (json.has("text")) {
+                    return json.optString("text", "")
+                }
+            } catch (_: Exception) {}
+        }
+        return trimmed
     }
 
     fun extractMediaFrames(file: File, maxFrames: Int = 6): List<String> {
