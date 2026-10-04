@@ -262,7 +262,15 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val details = fileManager.extractAudioMediaDetails(audioFile)
                     if (rawAudioResult.isSuccess) {
                         val transcript = rawAudioResult.getOrThrow()
-                        attachedContent = "[GERÇEK SES MODELİNDEN HAM SES TRANSKRİPTİ - Dosya: ${attached.path}]:\n$transcript\n\n[MEDYA BİLGİSİ]:\n$details"
+                        val whisperTool = ToolExecution(
+                            toolName = "🎙️ Whisper Ses Ajanı",
+                            summary = "'${attached.name}' ses dökümü tamamlandı",
+                            inputDetail = "Dosya: ${attached.path} (${attached.formattedSize})",
+                            outputDetail = "Transkript (${transcript.length} karakter):\n${transcript.take(1200)}...",
+                            status = ToolStatus.SUCCESS
+                        )
+                        messageBlocks.add(MessageBlock(type = BlockType.TOOL, tool = whisperTool))
+                        attachedContent = "[WHISPER TARAFINDAN ÇIKARILAN GERÇEK SES TRANSKRİPTİ - Dosya: ${attached.path}]:\n$transcript\n\n[DİKKAT]: Ses transkripti yukarıda hazır olarak verilmiştir. Kullanıcının sorusuna doğrudan bu transkripti kullanarak cevap ver. Asla 'dosya ekleyin' veya 'komut çalıştırın' deme."
                     } else {
                         attachedContent = "[GERÇEK SES DOSYASI GİRDİSİ - ${attached.name} (${attached.formattedSize})]:\n$details\n(Not: Dosyanın ham ikili ses verisi yerel sunucuya iletildi. Lütfen içeriği ve ders detaylarını analiz et.)"
                     }
@@ -374,11 +382,21 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val toolResultsSynthesis = executedTools.joinToString("\n\n") { tool ->
                         "[ARAÇ ÇIKTISI: ${tool.toolName}]:\n${tool.outputDetail}"
                     }
-                    val followUpSystem = preferences.supremePrompt + "\n\n" +
-                        "[ÇALIŞTIRILAN ARAÇLARIN ÇIKTILARI ALINDI]:\n$toolResultsSynthesis\n\n" +
-                        "[TALİMAT]: Araç sonuçları yukarıda hazır. Şimdi bu verileri kullanarak kullanıcının asıl sorusuna eksiksiz, samimi ve akıcı Türkçe ile nihai ders yanıtını ver. Asla 'çıktıyı paylaşın' deme, tüm veriler sana sağlandı."
+                    val followUpSystem = buildString {
+                        append("[EN ÜST KADEME EMİR: NİHAİ DERS YANITINI VE TRANSKRİPTİNİ YAZ]\n")
+                        append("Sen kullanıcının kişisel Okul Asistanısın.\n")
+                        append("Kullanıcı senden ders/ses dosyasının dökümünü, transkriptini veya özetini istedi.\n")
+                        append("Arka plandaki araçlar çalıştırıldı ve elde edilen gerçek transkript/içerik aşağıdadır:\n\n")
+                        append(toolResultsSynthesis)
+                        append("\n\n[KESİN KURALLAR - ASLA İHLAL EDİLEMEZ]:\n")
+                        append("1. Yukarıdaki gerçek transkripti ve bilgileri doğrudan kullanarak kullanıcının istediği transkript metnini eksiksiz, okunaklı ve düzenli olarak yaz.\n")
+                        append("2. KESİNLİKLE YASAK: ASLA 'Lütfen ses dosyanızı ekleyin', 'dosya adı belirtin', 'örneğin komut dosya incele çalıştırın' DEME! Sen bir asistansın; araçlar zaten çalıştırıldı ve sonuçlar elindedir.\n")
+                        append("3. Kullanıcıya komut sözdizimi öğretme veya örnek komut verme. Doğrudan transkript dökümünü ve ders özetini Türkçe olarak ver.\n")
+                    }
 
-                    val followUpMessages = _uiState.value.messages.dropLast(1)
+                    val followUpMessages = _uiState.value.messages.dropLast(1).toMutableList().apply {
+                        add(ChatMessage(role = MessageRole.USER, content = "Dosyayı inceledin ve transkript elinde. Lütfen şimdi transkripti eksiksiz dök ve ders özetimi ver."))
+                    }
 
                     val synthBlockIndex = messageBlocks.size
                     messageBlocks.add(MessageBlock(type = BlockType.TEXT, text = "\n\nCevap hazırlanıyor..."))
@@ -900,11 +918,14 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
     private fun cleanActionSyntax(raw: String): String {
         return raw
             .replace(Regex("\\[KOMUT:\\s*(?:NOT_OLUŞTUR|DOSYA_OLUŞTUR)\\s*\\|\\s*.*?\\s*\\|\\s*[\\s\\S]*?\\]"), "*(Ders notu okul klasörünüze otomatik kaydedildi)*")
+            .replace(Regex("\\[KOMUT:\\s*DOSYA_İNCELE\\s*\\|\\s*.*?\\]"), "*(Dosya incelendi)*")
             .replace(Regex("\\[KOMUT:\\s*METİN_DÜZENLE\\s*\\|\\s*.*?\\s*\\|\\s*[\\s\\S]*?\\]"), "*(Dosya içeriği başarıyla güncellendi)*")
             .replace(Regex("\\[KOMUT:\\s*KLASÖR_OLUŞTUR\\s*\\|\\s*.*?\\]"), "*(Yeni okul klasörü açıldı)*")
             .replace(Regex("\\[KOMUT:\\s*YENİDEN_ADLANDIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(Dosya adı başarıyla güncellendi)*")
             .replace(Regex("\\[KOMUT:\\s*İNDİR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(İndirme işlemi başlatıldı)*")
-            .replace(Regex("\\[KOMUT:\\s*GÖRSEL_MODELİ_ÇAĞIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(2. Model ile görsel/video analizi tamamlandı)*")
+            .replace(Regex("\\[KOMUT:\\s*ARA\\s*\\|\\s*.*?\\]"), "*(İnternet araması yapıldı)*")
+            .replace(Regex("\\[KOMUT:\\s*GÖRSEL_MODELİ_ÇAĞIR\\s*\\|\\s*.*?\\s*\\|\\s*.*?\\]"), "*(2. Model ile görsel analizi tamamlandı)*")
+            .replace(Regex("\\[KOMUT:[^\\]]+\\]"), "")
     }
 
     fun downloadMedia(url: String, customName: String? = null) {
