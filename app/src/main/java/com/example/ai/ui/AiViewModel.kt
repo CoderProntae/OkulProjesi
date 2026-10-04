@@ -87,6 +87,8 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             var newModelName = preferences.modelName
             var statusMsg: String? = null
 
+            var newVisionModelName = preferences.visionModelName
+
             if (status.isConnected && status.availableModels.isNotEmpty()) {
                 val exactMatch = status.availableModels.firstOrNull { it.equals(preferences.modelName, ignoreCase = true) }
                 if (exactMatch != null) {
@@ -99,6 +101,20 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     preferences.modelName = matchingInstalled
                     statusMsg = "Bilgisayarınızdaki '$matchingInstalled' modeli otomatik seçildi."
                 }
+
+                val exactVision = status.availableModels.firstOrNull { it.equals(preferences.visionModelName, ignoreCase = true) }
+                if (exactVision != null) {
+                    newVisionModelName = exactVision
+                    preferences.visionModelName = exactVision
+                } else {
+                    val matchingVision = status.availableModels.firstOrNull {
+                        it.contains("minicpm", ignoreCase = true) || it.contains("vision", ignoreCase = true) || it.contains("llava", ignoreCase = true)
+                    }
+                    if (matchingVision != null) {
+                        newVisionModelName = matchingVision
+                        preferences.visionModelName = matchingVision
+                    }
+                }
             }
 
             val audioStatus = aiClient.testAudioConnection(preferences.audioServerUrl)
@@ -107,6 +123,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 serverStatus = status,
                 audioServerStatus = audioStatus,
                 modelName = newModelName,
+                visionModelName = newVisionModelName,
                 statusMessage = statusMsg ?: _uiState.value.statusMessage
             )
         }
@@ -355,18 +372,17 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 val executedTools = parsedBlocks.mapNotNull { it.tool }
                 if (executedTools.isNotEmpty()) {
                     val toolResultsSynthesis = executedTools.joinToString("\n\n") { tool ->
-                        "### [${tool.toolName} - Sonuç]:\n${tool.outputDetail}"
+                        "[ARAÇ ÇIKTISI: ${tool.toolName}]:\n${tool.outputDetail}"
                     }
                     val followUpSystem = preferences.supremePrompt + "\n\n" +
-                        "Aşağıdaki araçlar başarıyla çalıştırıldı ve sonuçları alındı. Şimdi bu sonuçları kullanarak kullanıcının asıl sorusunu eksiksiz, samimi, ders odaklı ve akıcı Türkçe ile nihai yanıta bağla:\n$toolResultsSynthesis"
+                        "[ÇALIŞTIRILAN ARAÇLARIN ÇIKTILARI ALINDI]:\n$toolResultsSynthesis\n\n" +
+                        "[TALİMAT]: Araç sonuçları yukarıda hazır. Şimdi bu verileri kullanarak kullanıcının asıl sorusuna eksiksiz, samimi ve akıcı Türkçe ile nihai ders yanıtını ver. Asla 'çıktıyı paylaşın' deme, tüm veriler sana sağlandı."
 
-                    val followUpMessages = _uiState.value.messages.dropLast(1).toMutableList().apply {
-                        add(ChatMessage(role = MessageRole.USER, content = "Araç sonuçlarına göre analizi tamamla ve cevabımı ver."))
-                    }
+                    val followUpMessages = _uiState.value.messages.dropLast(1)
 
                     val synthBlockIndex = messageBlocks.size
-                    messageBlocks.add(MessageBlock(type = BlockType.TEXT, text = "\n\nSonuçlar derleniyor..."))
-                    updateAssistantState(statusMsg = "Model araç sonuçlarını analiz ediyor...", activeTool = "🧠 Nihai Yanıt")
+                    messageBlocks.add(MessageBlock(type = BlockType.TEXT, text = "\n\nCevap hazırlanıyor..."))
+                    updateAssistantState(statusMsg = "Model sonuçları analiz ediyor...", activeTool = "🧠 Nihai Yanıt")
 
                     val synthAccum = StringBuilder()
                     val synthResult = aiClient.sendChat(

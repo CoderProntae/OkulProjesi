@@ -103,24 +103,27 @@ class LocalAiClient(
                 append("\n[GERÇEK DOSYA VE DİSK ERİŞİMİ - KESİN KURALLAR]:")
                 append("\n1. Kullanıcı sana bir dosya eklediğinde (veya soru sorduğunda), o dosyanın gerçek fiziksel disk yolu, boyutu, tüm içeriği / medya bilgileri / transkripti sana [KULLANICININ EKLEDİĞİ GERÇEK OKUL DOSYASI] altında doğrudan verilir.")
                 append("\n2. KESİNLİKLE YASAK: ASLA 'lütfen dosyanızı ekleyin', 'dosyayı göremiyorum', 'ben bir yapay zekayım' DEME! Dosya sana zaten eksiksiz olarak verilmiştir. Kullanıcının istediği transkripti, özetini, soru çözümünü veya notunu anında üret.")
-                append("\n3. SES DOSYALARI (MP3/WAV/M4A) VE TRANSKRİPT: Kullanıcı bir ses dosyası ekleyip 'transkriptini çıkar', 'ders dökümünü yaz' dediğinde, ses dosyasının bilgilerini kullanarak dersteki diyalogları, dinleme metnini, kelimeleri ve transkripti eksiksiz çıkar. Ardından bunu kaydetmek için `[KOMUT: NOT_OLUŞTUR | dosya_adi_transkript.txt | tam_transkript]` komutunu kullan.")
+                append("\n3. SES DOSYALARI (MP3/WAV/M4A/OGG) - KESİN KURAL:")
+                append("\n- Ses dosyaları ses motoru (Whisper) ile işlenir. 2. Model ($visionModelName) bir GÖRSEL modeldir ve ses dosyalarını KESİNLİKLE İŞLEYEMEZ.")
+                append("\n- Bu nedenle ses dosyaları (.mp3, .wav vb.) için ASLA `GÖRSEL_MODELİ_ÇAĞIR` komutunu KULLANMA!")
+                append("\n- Kullanıcı ses dosyası eklediğinde, dosyanın transkripti veya bilgisi sana doğrudan sağlanır. Gerekirse `[KOMUT: DOSYA_İNCELE | dosya_adi]` çağırabilirsin. Kullanıcının sorusunu yanıtla ve notu `[KOMUT: NOT_OLUŞTUR | dosya_adi_not.txt | içerik]` ile kaydet.")
                 if (isThinkingEnabled) {
                     append("\n\n[DÜŞÜNME MODU AKTİF]: Nihai yanıtını vermeden önce adım adım düşünme sürecini <think>...</think> etiketleri içerisine yaz. Ardından doğrudan nihai yanıtını ve çözümlerini sun.")
                 }
                 if (!workspaceOverview.isNullOrBlank()) {
                     append("\n\n[MEVCUT TAM OKUL ÇALIŞMA ALANI AĞACI]:\n").append(workspaceOverview)
                 }
-                append("\n\n[2. MODEL (GÖRSEL VE VİDEO UZMANI - $visionModelName) PROTOKOLÜ]:")
+                append("\n\n[2. MODEL (SADECE GÖRSEL VE VİDEO UZMANI - $visionModelName) PROTOKOLÜ]:")
                 append("\nSistemde yüksek çözünürlüklü görsel (fotoğraf/belge/ödev/el yazısı/grafik) ve video analizi yapabilen 2. bir yapay zeka modeli ($visionModelName) hazırdır.")
-                append("\n- Bir görsel veya video hakkında soru sorulduğunda veya incelemen gerektiğinde 2. modele sorunu İNGİLİZCE olarak şu komutla ilet:")
+                append("\n- SADECE resim (.jpg, .png) veya video (.mp4, .mkv) dosyaları inceleneceği zaman 2. modele sorunu İNGİLİZCE olarak şu komutla ilet:")
                 append("\n  [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | Please analyze all visible questions, math formulas, diagrams and text in this file in detail]")
                 append("\n- 2. Model sana detaylı bir İngilizce görsel analiz raporu sunacaktır.")
                 append("\n- SENİN GÖREVİN: 2. Modelin analiz raporunu alıp kullanıcıya akıcı ve kusursuz bir TÜRKÇE ile ders çözümü veya notu olarak sunmaktır.")
 
                 append("\n\n[EYLEM VE ARAÇ KULLANIM KURALLARI]:")
-                append("\n- Önce ne yapacağını kullanıcıya nazikçe açıkla (Örn: '01.mp3 dosyanızı inceliyorum...', 'Görseli 2. modele iletiyorum...'), ardından ilgili komutu yaz, ardından sonucunu sun.")
-                append("\n- Dosya içeriğini incelemek için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
-                append("\n- Görsel/video analizini 2. modele yaptırmak için: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | English question]")
+                append("\n- Önce ne yapacağını kullanıcıya nazikçe açıkla (Örn: '01.mp3 dosyanızı inceliyorum...'), ardından ilgili komutu yaz, ardından sonucunu sun.")
+                append("\n- Dosya içeriğini/transkriptini incelemek için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
+                append("\n- SADECE görsel/video analizi için 2. modeli çağırmak: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | English question]")
                 append("\n- Metin düzenlemek için: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]")
                 append("\n- Ders notu/transkript kaydetmek için: [KOMUT: NOT_OLUŞTUR | dosya_adi.txt | içerik]")
                 append("\n- Yeni klasör açmak için: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]")
@@ -478,38 +481,37 @@ class LocalAiClient(
             } catch (_: Exception) {}
         }
 
-        // Try raw base64 audio payload to multimodal chat endpoint
-        for (targetUrl in urlsToTry) {
-            try {
-                val audioBytes = audioFile.readBytes()
-                val base64Audio = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
-                val audioPayload = JSONObject().apply {
-                    put("model", "whisper")
-                    put("messages", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("role", "user")
-                            put("content", prompt)
-                            put("audio", base64Audio)
-                        })
+        // Try raw base64 audio payload to multimodal chat endpoint on Ollama
+        try {
+            val ollamaUrl = serverUrl.trim().removeSuffix("/")
+            val audioBytes = audioFile.readBytes()
+            val base64Audio = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+            val audioPayload = JSONObject().apply {
+                put("model", "whisper")
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", prompt)
+                        put("audio", base64Audio)
                     })
-                    put("stream", false)
+                })
+                put("stream", false)
+            }
+            val reqBody = audioPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val req = Request.Builder()
+                .url("$ollamaUrl/api/chat")
+                .post(reqBody)
+                .build()
+            val resp = client.newCall(req).execute()
+            if (resp.isSuccessful) {
+                val b = resp.body?.string().orEmpty()
+                val j = JSONObject(b)
+                val c = j.optJSONObject("message")?.optString("content", "").orEmpty()
+                if (c.isNotBlank()) {
+                    return@withContext Result.success(c)
                 }
-                val reqBody = audioPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val req = Request.Builder()
-                    .url("$targetUrl/api/chat")
-                    .post(reqBody)
-                    .build()
-                val resp = client.newCall(req).execute()
-                if (resp.isSuccessful) {
-                    val b = resp.body?.string().orEmpty()
-                    val j = JSONObject(b)
-                    val c = j.optJSONObject("message")?.optString("content", "").orEmpty()
-                    if (c.isNotBlank()) {
-                        return@withContext Result.success(c)
-                    }
-                }
-            } catch (_: Exception) {}
-        }
+            }
+        } catch (_: Exception) {}
 
         Result.failure(Exception("Yerel Whisper veya Ses Modeli (port 8000/11435) yanıt vermedi."))
     }
