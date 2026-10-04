@@ -11,8 +11,10 @@ import com.example.model.SchoolItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -98,9 +100,10 @@ class LocalAiClient(
                 append("\n\n[SENİN KİMLİĞİN VE ÇALIŞMA ALANI ORTAMI]")
                 append("\nSen kullanıcının Android cihazındaki yerel yapay zeka asistanı ve Okul Dosya Yöneticisisin.")
                 append("\nModel adın: $modelName.")
-                append("\n[GERÇEK DOSYA VE DİSK ERİŞİMİ - KESİN KURAL]:")
-                append("\nKullanıcı sana bir dosya eklediğinde veya soru sorduğunda, o dosyanın gerçek fiziksel disk yolu, boyutu, tam içeriği / medya bilgileri sana [KULLANICININ EKLEDİĞİ GERÇEK OKUL DOSYASI] altında doğrudan verilir.")
-                append("\nKESİNLİKLE YASAK: ASLA 'lütfen dosyanızı ekleyin', 'dosyaya erişemiyorum', 'ben sadece bir yapay zekayım' gibi mazeretler üretme! Dosya zaten fiziksel olarak okunmuş ve sana eksiksiz verilmiştir. Hemen kullanıcının istediği transkripti, özetini, soru çözümünü veya notunu üret.")
+                append("\n[GERÇEK DOSYA VE DİSK ERİŞİMİ - KESİN KURALLAR]:")
+                append("\n1. Kullanıcı sana bir dosya eklediğinde (veya soru sorduğunda), o dosyanın gerçek fiziksel disk yolu, boyutu, tüm içeriği / medya bilgileri / transkripti sana [KULLANICININ EKLEDİĞİ GERÇEK OKUL DOSYASI] altında doğrudan verilir.")
+                append("\n2. KESİNLİKLE YASAK: ASLA 'lütfen dosyanızı ekleyin', 'dosyayı göremiyorum', 'ben bir yapay zekayım' DEME! Dosya sana zaten eksiksiz olarak verilmiştir. Kullanıcının istediği transkripti, özetini, soru çözümünü veya notunu anında üret.")
+                append("\n3. SES DOSYALARI (MP3/WAV/M4A) VE TRANSKRİPT: Kullanıcı bir ses dosyası ekleyip 'transkriptini çıkar', 'ders dökümünü yaz' dediğinde, ses dosyasının bilgilerini kullanarak dersteki diyalogları, dinleme metnini, kelimeleri ve transkripti eksiksiz çıkar. Ardından bunu kaydetmek için `[KOMUT: NOT_OLUŞTUR | dosya_adi_transkript.txt | tam_transkript]` komutunu kullan.")
                 if (isThinkingEnabled) {
                     append("\n\n[DÜŞÜNME MODU AKTİF]: Nihai yanıtını vermeden önce adım adım düşünme sürecini <think>...</think> etiketleri içerisine yaz. Ardından doğrudan nihai yanıtını ve çözümlerini sun.")
                 }
@@ -109,21 +112,21 @@ class LocalAiClient(
                 }
                 append("\n\n[2. MODEL (GÖRSEL VE VİDEO UZMANI - $visionModelName) PROTOKOLÜ]:")
                 append("\nSistemde yüksek çözünürlüklü görsel (fotoğraf/belge/ödev/el yazısı/grafik) ve video analizi yapabilen 2. bir yapay zeka modeli ($visionModelName) hazırdır.")
-                append("\n2. Model, optik karakter tanıma (OCR) ve video anlama işlemlerinde en yüksek performansı İNGİLİZCE (English) verir.")
-                append("\n- Kullanıcı bir görsel veya video hakkında soru sorduğunda ya da bu dosyaları incelemen gerektiğinde 2. modele sorunu İNGİLİZCE olarak şu komutla ilet:")
+                append("\n- Bir görsel veya video hakkında soru sorulduğunda veya incelemen gerektiğinde 2. modele sorunu İNGİLİZCE olarak şu komutla ilet:")
                 append("\n  [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | Please analyze all visible questions, math formulas, diagrams and text in this file in detail]")
                 append("\n- 2. Model sana detaylı bir İngilizce görsel analiz raporu sunacaktır.")
-                append("\n- SENİN GÖREVİN: 2. Modelin İngilizce analiz raporunu alıp kullanıcıya akıcı, eksiksiz ve kusursuz bir TÜRKÇE ile ders çözümü, notu veya özeti olarak sunmaktır.")
+                append("\n- SENİN GÖREVİN: 2. Modelin analiz raporunu alıp kullanıcıya akıcı ve kusursuz bir TÜRKÇE ile ders çözümü veya notu olarak sunmaktır.")
 
-                append("\n\n[EYLEM VE ARAÇ KULLANIM SÖZ DİZİMİ - Kullanıcı okul dosyalarını veya sistemi yönetmeni istediğinde bu komutları kullanabilirsin]:")
-                append("\n- Dosya içeriğini incelemek/okumak için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
-                append("\n- Görsel veya video dosyalarını 2. modele inceletmek için (soruyu İngilizce yaz): [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | English question]")
-                append("\n- Mevcut metin/.txt dosyasını düzenlemek/güncellemek için: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]")
-                append("\n- Yeni ders notu veya dosya oluşturmak için: [KOMUT: NOT_OLUŞTUR | dosya_adi.txt | içerik]")
-                append("\n- Yeni okul klasörü açmak için: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]")
-                append("\n- Dosya veya klasör adı değiştirmek için: [KOMUT: YENİDEN_ADLANDIR | eski_ad | yeni_ad]")
-                append("\n- İnternetten dosya/video indirmek için: [KOMUT: İNDİR | dosya_url | dosya_adi]")
-                append("\n- İnternette yeni arama yapmak için: [KOMUT: ARA | arama_sorgusu]")
+                append("\n\n[EYLEM VE ARAÇ KULLANIM KURALLARI]:")
+                append("\n- Önce ne yapacağını kullanıcıya nazikçe açıkla (Örn: '01.mp3 dosyanızı inceliyorum...', 'Görseli 2. modele iletiyorum...'), ardından ilgili komutu yaz, ardından sonucunu sun.")
+                append("\n- Dosya içeriğini incelemek için: [KOMUT: DOSYA_İNCELE | dosya_adi]")
+                append("\n- Görsel/video analizini 2. modele yaptırmak için: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | English question]")
+                append("\n- Metin düzenlemek için: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]")
+                append("\n- Ders notu/transkript kaydetmek için: [KOMUT: NOT_OLUŞTUR | dosya_adi.txt | içerik]")
+                append("\n- Yeni klasör açmak için: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]")
+                append("\n- Yeniden adlandırmak için: [KOMUT: YENİDEN_ADLANDIR | eski_ad | yeni_ad]")
+                append("\n- Dosya indirmek için: [KOMUT: İNDİR | dosya_url | dosya_adi]")
+                append("\n- İnternet araması için: [KOMUT: ARA | arama_sorgusu]")
             }
 
             messagesArray.put(
@@ -163,19 +166,24 @@ class LocalAiClient(
                 extraContext.append("\n\n[CANLI İNTERNET ARAMA SONUÇLARI]:\n").append(webSearchSummary)
             }
 
-            // If vision model and image attached, prepare base64 image
-            var base64Image: String? = null
-            if (attachedItem != null && (attachedItem.extension.lowercase() in listOf("jpg", "jpeg", "png", "webp"))) {
-                base64Image = encodeImageToBase64(File(attachedItem.path))
+            // If image or video attached, prepare base64 image frames
+            val mediaImages = mutableListOf<String>()
+            if (attachedItem != null) {
+                val f = File(attachedItem.path)
+                val frames = extractMediaFrames(f, maxFrames = 3)
+                mediaImages.addAll(frames)
             }
 
-            if (extraContext.isNotEmpty() && messagesArray.length() > 1) {
+            if (messagesArray.length() > 1) {
                 val lastObj = messagesArray.getJSONObject(messagesArray.length() - 1)
                 val currentText = lastObj.optString("content", "")
-                lastObj.put("content", currentText + extraContext.toString())
+                if (extraContext.isNotEmpty()) {
+                    lastObj.put("content", (currentText + extraContext.toString()).trim())
+                }
 
-                if (base64Image != null) {
-                    val imagesArr = JSONArray().apply { put(base64Image) }
+                if (mediaImages.isNotEmpty()) {
+                    val imagesArr = JSONArray()
+                    mediaImages.forEach { imagesArr.put(it) }
                     lastObj.put("images", imagesArr)
                 }
             }
@@ -283,54 +291,161 @@ class LocalAiClient(
         serverUrl: String,
         visionModelName: String,
         prompt: String,
-        base64Images: List<String>
+        base64Images: List<String>,
+        fallbackModelName: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         val cleanUrl = serverUrl.trim().removeSuffix("/")
-        try {
-            val messagesArray = JSONArray()
-            val userMsg = JSONObject().apply {
-                put("role", "user")
-                put("content", prompt)
-                if (base64Images.isNotEmpty()) {
-                    val imgArr = JSONArray()
-                    base64Images.forEach { imgArr.put(it) }
-                    put("images", imgArr)
+        
+        suspend fun executeCall(modelToUse: String): Result<String> {
+            return try {
+                val messagesArray = JSONArray()
+                val userMsg = JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                    if (base64Images.isNotEmpty()) {
+                        val imgArr = JSONArray()
+                        base64Images.forEach { imgArr.put(it) }
+                        put("images", imgArr)
+                    }
                 }
-            }
-            messagesArray.put(userMsg)
+                messagesArray.put(userMsg)
 
-            val payload = JSONObject().apply {
-                put("model", visionModelName)
-                put("messages", messagesArray)
-                put("stream", false)
-                put("options", JSONObject().apply {
-                    put("temperature", 0.3)
-                    put("num_predict", 1024)
-                })
-            }
+                val payload = JSONObject().apply {
+                    put("model", modelToUse)
+                    put("messages", messagesArray)
+                    put("stream", false)
+                    put("options", JSONObject().apply {
+                        put("temperature", 0.3)
+                        put("num_predict", 1024)
+                    })
+                }
 
-            val requestBody = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url("$cleanUrl/api/chat")
-                .post(requestBody)
-                .build()
+                val requestBody = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder()
+                    .url("$cleanUrl/api/chat")
+                    .post(requestBody)
+                    .build()
 
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                val err = response.body?.string().orEmpty()
-                return@withContext Result.failure(Exception("2. Görsel Model ($visionModelName) yanıt vermedi: HTTP ${response.code} ($err)"))
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    val err = response.body?.string().orEmpty()
+                    return Result.failure(Exception("Model ($modelToUse) yanıt vermedi: HTTP ${response.code} ($err)"))
+                }
+                val respBody = response.body?.string().orEmpty()
+                val respJson = JSONObject(respBody)
+                val msgObj = respJson.optJSONObject("message")
+                val content = msgObj?.optString("content", "").orEmpty()
+                Result.success(content)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
-            val respBody = response.body?.string().orEmpty()
-            val respJson = JSONObject(respBody)
-            val msgObj = respJson.optJSONObject("message")
-            val content = msgObj?.optString("content", "").orEmpty()
-            Result.success(content)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+
+        val primaryResult = executeCall(visionModelName)
+        if (primaryResult.isSuccess) {
+            return@withContext primaryResult
+        }
+
+        // If primary vision model failed and fallback model is provided, try fallback model
+        if (!fallbackModelName.isNullOrBlank() && fallbackModelName != visionModelName) {
+            val fallbackResult = executeCall(fallbackModelName)
+            if (fallbackResult.isSuccess) {
+                return@withContext fallbackResult
+            }
+        }
+
+        primaryResult
     }
 
-    fun extractMediaFrames(file: File, maxFrames: Int = 3): List<String> {
+    suspend fun processRawAudioInput(
+        serverUrl: String,
+        audioFile: File,
+        audioServerUrl: String? = null,
+        prompt: String = "Please transcribe all spoken dialogue and speech in this audio accurately."
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val urlsToTry = mutableListOf<String>()
+        if (!audioServerUrl.isNullOrBlank()) {
+            urlsToTry.add(audioServerUrl.trim().removeSuffix("/"))
+        }
+        val cleanUrl = serverUrl.trim().removeSuffix("/")
+        if (!urlsToTry.contains(cleanUrl)) {
+            urlsToTry.add(cleanUrl)
+        }
+        val hostPart = cleanUrl.substringBeforeLast(":")
+        val whisperPortUrl = "$hostPart:8000"
+        if (!urlsToTry.contains(whisperPortUrl)) {
+            urlsToTry.add(whisperPortUrl)
+        }
+
+        val mediaType = when (audioFile.extension.lowercase()) {
+            "wav" -> "audio/wav".toMediaType()
+            "ogg" -> "audio/ogg".toMediaType()
+            "flac" -> "audio/flac".toMediaType()
+            else -> "audio/mpeg".toMediaType()
+        }
+
+        // Try standard Whisper endpoint on all candidates
+        for (targetUrl in urlsToTry) {
+            try {
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", audioFile.name, audioFile.asRequestBody(mediaType))
+                    .addFormDataPart("model", "whisper")
+                    .addFormDataPart("response_format", "text")
+                    .build()
+
+                val request = Request.Builder()
+                    .url("$targetUrl/v1/audio/transcriptions")
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val transcript = response.body?.string().orEmpty().trim()
+                    if (transcript.isNotBlank()) {
+                        return@withContext Result.success(transcript)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Try raw base64 audio payload to multimodal chat endpoint
+        for (targetUrl in urlsToTry) {
+            try {
+                val audioBytes = audioFile.readBytes()
+                val base64Audio = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+                val audioPayload = JSONObject().apply {
+                    put("model", "whisper")
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", prompt)
+                            put("audio", base64Audio)
+                        })
+                    })
+                    put("stream", false)
+                }
+                val reqBody = audioPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val req = Request.Builder()
+                    .url("$targetUrl/api/chat")
+                    .post(reqBody)
+                    .build()
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val b = resp.body?.string().orEmpty()
+                    val j = JSONObject(b)
+                    val c = j.optJSONObject("message")?.optString("content", "").orEmpty()
+                    if (c.isNotBlank()) {
+                        return@withContext Result.success(c)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        Result.failure(Exception("Yerel Whisper veya Ses Modeli (port 8000/11435) yanıt vermedi."))
+    }
+
+    fun extractMediaFrames(file: File, maxFrames: Int = 6): List<String> {
         val ext = file.extension.lowercase()
         return if (ext in listOf("mp4", "mkv", "webm", "avi", "3gp", "mov")) {
             extractVideoFrames(file, maxFrames)
@@ -342,7 +457,7 @@ class LocalAiClient(
         }
     }
 
-    private fun extractVideoFrames(videoFile: File, maxFrames: Int = 3): List<String> {
+    private fun extractVideoFrames(videoFile: File, maxFrames: Int = 6): List<String> {
         val frames = mutableListOf<String>()
         val retriever = MediaMetadataRetriever()
         try {

@@ -83,7 +83,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ai.model.BlockType
 import com.example.ai.model.ChatMessage
+import com.example.ai.model.MessageBlock
 import com.example.ai.model.MessageRole
 import com.example.ai.model.ToolExecution
 import com.example.ui.components.getTypeColorAndIcon
@@ -499,81 +501,64 @@ fun ChatMessageBubble(
                     }
                 }
 
-                // Live Expandable Tools Executed by Model
-                if (message.toolExecutions.isNotEmpty()) {
+                if (message.blocks.isNotEmpty()) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        message.toolExecutions.forEach { tool ->
-                            ToolExecutionCard(tool = tool)
-                        }
-                    }
-                }
-
-                // Expandable Thinking Box (if DeepSeek-R1 or reasoning model emitted <think>)
-                if (!message.thinkingContent.isNullOrBlank()) {
-                    Card(
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp)
-                            .clickable { isThinkingExpanded = !isThinkingExpanded }
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Psychology,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Modelin Düşünme Süreci (<think>)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                        message.blocks.forEach { block ->
+                            when (block.type) {
+                                BlockType.THINKING -> {
+                                    if (block.text.isNotBlank()) {
+                                        ThinkingCard(thinkingContent = block.text)
+                                    }
                                 }
-                                Icon(
-                                    imageVector = if (isThinkingExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            if (isThinkingExpanded) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = message.thinkingContent,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontSize = 11.sp,
-                                    lineHeight = 16.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                BlockType.TOOL -> {
+                                    if (block.tool != null) {
+                                        ToolExecutionCard(tool = block.tool)
+                                    }
+                                }
+                                BlockType.TEXT -> {
+                                    if (block.text.isNotBlank()) {
+                                        Text(
+                                            text = block.text,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            lineHeight = 22.sp
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                } else {
+                    // Fallback for legacy messages
+                    if (message.toolExecutions.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            message.toolExecutions.forEach { tool ->
+                                ToolExecutionCard(tool = tool)
+                            }
+                        }
+                    }
 
-                // Main Message Content
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 22.sp
-                )
+                    if (!message.thinkingContent.isNullOrBlank()) {
+                        ThinkingCard(thinkingContent = message.thinkingContent)
+                    }
+
+                    if (message.content.isNotBlank()) {
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 22.sp
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -621,6 +606,60 @@ fun ChatMessageBubble(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ThinkingCard(thinkingContent: String) {
+    var isThinkingExpanded by remember { mutableStateOf(false) }
+    Card(
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { isThinkingExpanded = !isThinkingExpanded }
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Psychology,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Modelin Düşünme Süreci (<think>)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Icon(
+                    imageVector = if (isThinkingExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            if (isThinkingExpanded) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = thinkingContent,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

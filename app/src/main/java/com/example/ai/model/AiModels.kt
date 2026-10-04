@@ -14,6 +14,12 @@ enum class ToolStatus {
     FAILED
 }
 
+enum class BlockType {
+    TEXT,
+    THINKING,
+    TOOL
+}
+
 data class ToolExecution(
     val id: String = System.currentTimeMillis().toString() + "_" + (0..9999).random(),
     val toolName: String, // e.g. "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)", "📁 Dosya İnceleme Ajanı"
@@ -24,12 +30,20 @@ data class ToolExecution(
     val errorMessage: String? = null
 )
 
+data class MessageBlock(
+    val id: String = System.currentTimeMillis().toString() + "_" + (0..9999).random(),
+    val type: BlockType,
+    val text: String = "",
+    val tool: ToolExecution? = null
+)
+
 data class ChatMessage(
     val id: String = System.currentTimeMillis().toString() + "_" + (0..9999).random(),
     val role: MessageRole,
     val content: String,
     val thinkingContent: String? = null,
     val toolExecutions: List<ToolExecution> = emptyList(),
+    val blocks: List<MessageBlock> = emptyList(),
     val attachedFile: SchoolItem? = null,
     val isWebSearch: Boolean = false,
     val isStreaming: Boolean = false,

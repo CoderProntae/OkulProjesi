@@ -126,6 +126,12 @@ fun SchoolWorkspaceScreen(
         }
     }
 
+    val zipPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.restoreFromZip(it) }
+    }
+
     // Handle status message snackbars
     LaunchedEffect(uiState.statusMessage) {
         uiState.statusMessage?.let { msg ->
@@ -614,6 +620,19 @@ fun SchoolWorkspaceScreen(
                         Icon(imageVector = Icons.Default.Restore, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Önceki Sürüm Dosyalarını Kurtar")
+                    }
+
+                    FilledTonalButton(
+                        onClick = {
+                            showBackupDialog = false
+                            zipPickerLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.DriveFolderUpload, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("ZIP Yedeğinden Geri Yükle (Alt Dizinlerle)")
                     }
 
                     OutlinedButton(

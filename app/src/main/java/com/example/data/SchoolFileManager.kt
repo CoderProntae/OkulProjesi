@@ -297,35 +297,24 @@ class SchoolFileManager(private val context: Context) {
         }
     }
 
-    suspend fun rename(target: File, newName: String): Result<File> = withContext(Dispatchers.IO) {
-        val cleanName = sanitizeFileName(newName)
-        if (cleanName.isBlank()) {
-            return@withContext Result.failure(IllegalArgumentException("Yeni isim boş olamaz"))
-        }
-        val dest = File(target.parentFile ?: currentDirectory, cleanName)
-        if (dest.exists()) {
-            return@withContext Result.failure(IllegalStateException("Bu isimde bir öge zaten mevcut"))
-        }
-        if (target.renameTo(dest)) {
-            Result.success(dest)
-        } else {
-            Result.failure(Exception("Yeniden adlandırma başarısız oldu"))
-        }
-    }
-
-    fun isTextFile(file: File): Boolean {
-        val ext = file.extension.lowercase()
-        return ext in listOf("txt", "md", "json", "csv", "srt", "lrc", "vtt", "xml", "html", "htm", "py", "kt", "c", "cpp", "js", "java", "ts", "css", "log", "ini", "conf", "sh", "bat", "ps1")
-    }
-
     suspend fun delete(target: File): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            // Also delete from persistentBackupDir so it's not restored again
+            // Also delete from all persistent backup mirrors so it never resurrects
             val relPath = target.relativeToOrNull(rootWorkspaceDir)?.path
-            if (relPath != null && persistentBackupDir != null) {
-                val mirrorTarget = File(persistentBackupDir, relPath)
-                if (mirrorTarget.exists()) {
-                    if (mirrorTarget.isDirectory) mirrorTarget.deleteRecursively() else mirrorTarget.delete()
+            if (relPath != null) {
+                val mirrorLocations = listOfNotNull(
+                    persistentBackupDir,
+                    File("/storage/emulated/0/Documents/OkulDizini"),
+                    File("/storage/emulated/0/Download/OkulDizini"),
+                    File(context.filesDir, "OkulDizini_Backup")
+                )
+                for (mirrorDir in mirrorLocations) {
+                    try {
+                        val mirrorTarget = File(mirrorDir, relPath)
+                        if (mirrorTarget.exists()) {
+                            if (mirrorTarget.isDirectory) mirrorTarget.deleteRecursively() else mirrorTarget.delete()
+                        }
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -338,6 +327,47 @@ class SchoolFileManager(private val context: Context) {
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun rename(target: File, newName: String): Result<File> = withContext(Dispatchers.IO) {
+        val cleanName = sanitizeFileName(newName)
+        if (cleanName.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Yeni isim boş olamaz"))
+        }
+        val dest = File(target.parentFile ?: currentDirectory, cleanName)
+        if (dest.exists()) {
+            return@withContext Result.failure(IllegalStateException("Bu isimde bir öge zaten mevcut"))
+        }
+
+        val oldRelPath = target.relativeToOrNull(rootWorkspaceDir)?.path
+        if (target.renameTo(dest)) {
+            // Update mirrors
+            if (oldRelPath != null) {
+                val mirrorLocations = listOfNotNull(
+                    persistentBackupDir,
+                    File("/storage/emulated/0/Documents/OkulDizini"),
+                    File("/storage/emulated/0/Download/OkulDizini")
+                )
+                for (mirrorDir in mirrorLocations) {
+                    try {
+                        val oldMirror = File(mirrorDir, oldRelPath)
+                        if (oldMirror.exists()) {
+                            val newMirror = File(oldMirror.parentFile ?: mirrorDir, cleanName)
+                            oldMirror.renameTo(newMirror)
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+            mirrorToPersistentStorage()
+            Result.success(dest)
+        } else {
+            Result.failure(Exception("Yeniden adlandırma başarısız oldu"))
+        }
+    }
+
+    fun isTextFile(file: File): Boolean {
+        val ext = file.extension.lowercase()
+        return ext in listOf("txt", "md", "json", "csv", "srt", "lrc", "vtt", "xml", "html", "htm", "py", "kt", "c", "cpp", "js", "java", "ts", "css", "log", "ini", "conf", "sh", "bat", "ps1")
     }
 
     suspend fun readText(file: File): String = withContext(Dispatchers.IO) {
@@ -651,8 +681,11 @@ class SchoolFileManager(private val context: Context) {
         var count = 0
         if (!source.exists()) return 0
         if (source.isDirectory) {
-            if (!target.exists()) target.mkdirs()
-            val files = source.listFiles() ?: return 0
+            if (!target.exists()) {
+                target.mkdirs()
+                count++
+            }
+            val files = source.listFiles() ?: return count
             for (f in files) {
                 count += copyRecursivelyWithoutOverwriting(f, File(target, f.name))
             }
@@ -668,7 +701,7 @@ class SchoolFileManager(private val context: Context) {
     }
 
     /**
-     * Mirrors all files in rootWorkspaceDir to persistent public storage
+     * Mirrors all files and subdirectories in rootWorkspaceDir to persistent public storage
      * so that if the user deletes the app or updates, the files remain safe.
      */
     fun mirrorToPersistentStorage() {
@@ -679,25 +712,28 @@ class SchoolFileManager(private val context: Context) {
     }
 
     /**
-     * Creates a full ZIP archive backup of the entire school workspace
-     * in the phone's Download folder.
+     * Creates a full ZIP archive backup of the entire school workspace with all subdirectories
      */
     fun backupWorkspaceToZip(): Result<File> {
         return try {
             val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadDir.exists()) downloadDir.mkdirs()
+            val baseOutDir = if (downloadDir.exists() && downloadDir.canWrite()) downloadDir else (context.getExternalFilesDir(null) ?: context.filesDir)
+            if (!baseOutDir.exists()) baseOutDir.mkdirs()
 
             val timestamp = System.currentTimeMillis()
-            val zipFile = File(downloadDir, "OkulDizini_Yedek_$timestamp.zip")
+            val zipFile = File(baseOutDir, "OkulDizini_Yedek_$timestamp.zip")
 
             ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
                 fun addDirToZip(dir: File, baseDir: File) {
                     val files = dir.listFiles() ?: return
                     for (file in files) {
+                        val relativePath = file.relativeTo(baseDir).path
                         if (file.isDirectory) {
+                            val entry = ZipEntry("$relativePath/")
+                            zos.putNextEntry(entry)
+                            zos.closeEntry()
                             addDirToZip(file, baseDir)
                         } else {
-                            val relativePath = file.relativeTo(baseDir).path
                             val entry = ZipEntry(relativePath)
                             zos.putNextEntry(entry)
                             FileInputStream(file).use { fis ->
@@ -712,6 +748,42 @@ class SchoolFileManager(private val context: Context) {
 
             mirrorToPersistentStorage()
             Result.success(zipFile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Restores an entire workspace from a ZIP backup archive selected by the user
+     */
+    suspend fun restoreWorkspaceFromZip(zipUri: Uri): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            var extractedCount = 0
+            val inputStream = context.contentResolver.openInputStream(zipUri)
+                ?: return@withContext Result.failure(Exception("ZIP dosyası açılamadı"))
+
+            java.util.zip.ZipInputStream(inputStream).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    val outPath = File(rootWorkspaceDir, entry.name)
+                    // Security check against Zip Slip
+                    if (outPath.canonicalPath.startsWith(rootWorkspaceDir.canonicalPath)) {
+                        if (entry.isDirectory) {
+                            outPath.mkdirs()
+                        } else {
+                            outPath.parentFile?.mkdirs()
+                            FileOutputStream(outPath).use { fos ->
+                                zis.copyTo(fos)
+                            }
+                            extractedCount++
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            mirrorToPersistentStorage()
+            Result.success(extractedCount)
         } catch (e: Exception) {
             Result.failure(e)
         }

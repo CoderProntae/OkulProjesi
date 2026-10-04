@@ -411,11 +411,33 @@ class SchoolViewModel(application: Application) : AndroidViewModel(application) 
             refresh()
             _uiState.value = _uiState.value.copy(
                 statusMessage = if (count > 0) {
-                    "Önceki sürümlerden $count dosya ve klasör başarıyla geri yüklendi!"
+                    "Önceki sürümlerden $count dosya ve alt klasör başarıyla geri yüklendi!"
                 } else {
                     "Tüm dosyalarınız zaten güncel ve mevcut."
                 }
             )
+        }
+    }
+
+    fun restoreFromZip(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, importProgressMessage = "ZIP yedek arşivi açılıyor...")
+            val res = fileManager.restoreWorkspaceFromZip(uri)
+            if (res.isSuccess) {
+                val count = res.getOrDefault(0)
+                refresh()
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    importProgressMessage = null,
+                    statusMessage = "ZIP yedeğindeki $count dosya ve alt dizin yapısı eksiksiz geri yüklendi!"
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    importProgressMessage = null,
+                    statusMessage = "Geri yükleme hatası: ${res.exceptionOrNull()?.localizedMessage}"
+                )
+            }
         }
     }
 

@@ -8,7 +8,9 @@ import com.example.ai.data.LocalAiClient
 import com.example.ai.data.MediaDownloader
 import com.example.ai.data.WebSearchEngine
 import com.example.ai.model.AiServerStatus
+import com.example.ai.model.BlockType
 import com.example.ai.model.ChatMessage
+import com.example.ai.model.MessageBlock
 import com.example.ai.model.MessageRole
 import com.example.ai.model.ToolExecution
 import com.example.ai.model.ToolStatus
@@ -149,7 +151,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             content = "",
             thinkingContent = null,
             modelName = activeModel,
-            toolExecutions = emptyList()
+            blocks = emptyList()
         )
 
         val updatedList = _uiState.value.messages + userMessage + placeholderAssistantMsg
@@ -162,22 +164,24 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         viewModelScope.launch {
-            val executedTools = mutableListOf<ToolExecution>()
+            val messageBlocks = mutableListOf<MessageBlock>()
 
-            fun updateAssistantMessage(
-                content: String? = null,
-                thinking: String? = null,
-                tools: List<ToolExecution>? = null,
+            fun updateAssistantState(
                 statusMsg: String? = null,
                 activeTool: String? = null
             ) {
                 val currentList = _uiState.value.messages.toMutableList()
                 if (currentList.isNotEmpty() && currentList.last().role == MessageRole.ASSISTANT) {
-                    val last = currentList.last()
-                    currentList[currentList.lastIndex] = last.copy(
-                        content = content ?: last.content,
-                        thinkingContent = thinking ?: last.thinkingContent,
-                        toolExecutions = tools ?: last.toolExecutions,
+                    val fullText = messageBlocks.filter { it.type == BlockType.TEXT }.joinToString("\n\n") { it.text }
+                    val thinkText = messageBlocks.firstOrNull { it.type == BlockType.THINKING }?.text
+                    val allTools = messageBlocks.mapNotNull { it.tool }
+
+                    currentList[currentList.lastIndex] = ChatMessage(
+                        role = MessageRole.ASSISTANT,
+                        content = fullText,
+                        thinkingContent = thinkText,
+                        blocks = messageBlocks.toList(),
+                        toolExecutions = allTools,
                         modelName = activeModel
                     )
                     _uiState.value = _uiState.value.copy(
@@ -188,201 +192,79 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // 1. Proactive File Inspection if user attaches a file or asks about a file
+            // 1. Prepare attached file content in background without polluting message blocks prematurely
             var attachedContent: String? = null
             if (attached != null) {
                 val ext = attached.extension.lowercase()
                 val isImageOrVideo = ext in listOf("jpg", "jpeg", "png", "webp", "mp4", "mkv", "webm", "avi", "mov")
                 val isAudio = ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac")
                 val isText = fileManager.isTextFile(File(attached.path))
-                val friendlyPath = fileManager.getUserFriendlyPath(File(attached.path))
 
                 if (isImageOrVideo) {
-                    val isVideo = ext in listOf("mp4", "mkv", "webm", "avi", "mov")
-                    val runningTool = ToolExecution(
-                        toolName = "👁️ 2. Model: MiniCPM-V (Görsel/Video Alt Ajanı)",
-                        summary = "${attached.name} (${if (isVideo) "Video" else "Görsel"}) 2. modelce analiz ediliyor...",
-                        inputDetail = "Dosya: $friendlyPath (${attached.formattedSize})\nModel: $activeVisionModel\nTalimat: English Visual Inspection",
-                        outputDetail = "Kilit kareler çıkarılıyor ve $activeVisionModel modeline iletiliyor...",
-                        status = ToolStatus.RUNNING
-                    )
-                    executedTools.add(runningTool)
-                    updateAssistantMessage(tools = executedTools.toList(), statusMsg = "2. Model ($activeVisionModel) görsel analizi yapıyor...")
-
                     val frames = aiClient.extractMediaFrames(File(attached.path), maxFrames = 3)
-                    if (frames.isNotEmpty()) {
-                        val visionPrompt = if (isVideo) {
-                            "You are an expert visual educator assistant. Analyze these ${frames.size} video keyframes extracted from the file '${attached.name}' in precise detail:\n" +
-                            "1. Describe the key visual content and actions (e.g. science experiment, lecture whiteboard, presentation slides, diagrams).\n" +
-                            "2. Transcribe and extract all visible text, questions, mathematical formulas, labels, and numbers accurately in English.\n" +
-                            "3. Structure your analysis clearly."
-                        } else {
-                            "You are an expert visual educator assistant. Analyze this educational image/document '${attached.name}' in precise detail:\n" +
-                            "1. Transcribe all visible text, handwritten notes, mathematical equations, questions, and diagrams accurately in English.\n" +
-                            "2. Explain what is depicted in the image clearly."
-                        }
-                        val visionResult = aiClient.callVisionModel(
-                            serverUrl = preferences.serverUrl,
-                            visionModelName = activeVisionModel,
-                            prompt = visionPrompt,
-                            base64Images = frames
-                        )
-                        if (visionResult.isSuccess) {
-                            val analysis = visionResult.getOrThrow()
-                            executedTools[executedTools.lastIndex] = runningTool.copy(
-                                summary = "${attached.name} (${if (isVideo) "Video: ${frames.size} kare" else "Fotoğraf"}) başarıyla incelendi",
-                                outputDetail = analysis,
-                                status = ToolStatus.SUCCESS
-                            )
-                            attachedContent = "[2. GÖRSEL VE VİDEO MODELİNİN ($activeVisionModel) İNGİLİZCE ANALİZ RAPORU - Dosya: ${attached.name}]:\n$analysis\n\n(YÖNERGE: Yukarıdaki İngilizce görsel analiz raporunu kullanarak kullanıcıya akıcı ve kusursuz Türkçe ile detaylı ders açıklaması, soru çözümü veya not oluştur.)"
-                        } else {
-                            val err = visionResult.exceptionOrNull()?.localizedMessage ?: "Görsel analizi başarısız oldu"
-                            executedTools[executedTools.lastIndex] = runningTool.copy(
-                                summary = "2. Model görsel analizi başarısız oldu",
-                                outputDetail = "Hata: $err",
-                                status = ToolStatus.FAILED,
-                                errorMessage = err
-                            )
-                        }
+                    val isVideo = ext in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    val visionPrompt = if (isVideo) {
+                        "You are an expert visual educator assistant. Analyze these ${frames.size} video keyframes extracted from '${attached.path}' in detail:\n" +
+                        "1. Describe visual content, actions, lecture slides, formulas.\n" +
+                        "2. Transcribe visible text and equations.\n" +
+                        "3. Structure your response clearly."
                     } else {
-                        executedTools[executedTools.lastIndex] = runningTool.copy(
-                            summary = "Video/Görsel kareleri çıkarılamadı",
-                            outputDetail = "Dosyadan kilit kareler okunamadı",
-                            status = ToolStatus.FAILED,
-                            errorMessage = "Kare çıkarılamadı"
-                        )
+                        "You are an expert visual educator assistant. Analyze this image/document '${attached.path}' in detail:\n" +
+                        "1. Transcribe all visible text, questions, diagrams and formulas accurately in English.\n" +
+                        "2. Explain what is depicted clearly."
                     }
-                    updateAssistantMessage(tools = executedTools.toList())
+                    val visionResult = aiClient.callVisionModel(
+                        serverUrl = preferences.serverUrl,
+                        visionModelName = activeVisionModel,
+                        prompt = visionPrompt,
+                        base64Images = frames,
+                        fallbackModelName = activeModel
+                    )
+                    if (visionResult.isSuccess) {
+                        val analysis = visionResult.getOrThrow()
+                        attachedContent = "[2. MODEL ($activeVisionModel) GÖRSEL/VİDEO ANALİZ RAPORU - Dosya: ${attached.path}]:\n$analysis"
+                    } else {
+                        attachedContent = "[GÖRSEL/VİDEO DOSYASI - ${attached.name} (${attached.formattedSize})]:\nDosya Yolu: ${attached.path}\nKilit Kare Sayısı: ${frames.size}\nLütfen bu dosya hakkındaki soruyu ve ders konusunu yanıtla."
+                    }
                 } else if (isAudio) {
-                    val runningTool = ToolExecution(
-                        toolName = "📁 Dosya İnceleme Ajanı",
-                        summary = "${attached.name} ses dosyası bağlamı taranıyor...",
-                        inputDetail = "Dosya: $friendlyPath (${attached.formattedSize})\nTür: Ses Dosyası",
-                        outputDetail = "İlişkili ders transkripti ve notları aranıyor...",
-                        status = ToolStatus.RUNNING
+                    val audioFile = File(attached.path)
+                    val rawAudioResult = aiClient.processRawAudioInput(
+                        serverUrl = preferences.serverUrl,
+                        audioFile = audioFile,
+                        audioServerUrl = preferences.audioServerUrl.ifBlank { null },
+                        prompt = "Transcribe all dialogue and educational speech from '${attached.name}' accurately."
                     )
-                    executedTools.add(runningTool)
-                    updateAssistantMessage(tools = executedTools.toList(), statusMsg = "Ders ses kaydı inceleniyor...")
-
-                    val associated = fileManager.findAssociatedTranscript(attached.name)
-                    if (associated != null) {
-                        executedTools[executedTools.lastIndex] = runningTool.copy(
-                            summary = "${attached.name} transkripti bulundu ve yüklendi",
-                            outputDetail = "Transkript Notu:\n$associated",
-                            status = ToolStatus.SUCCESS
-                        )
-                        attachedContent = "[DERS SES KAYDI: ${attached.name} (${attached.formattedSize})]\nBu ses dosyasıyla ilişkili ders transkripti / notu bulundu:\n$associated"
+                    val details = fileManager.extractAudioMediaDetails(audioFile)
+                    if (rawAudioResult.isSuccess) {
+                        val transcript = rawAudioResult.getOrThrow()
+                        attachedContent = "[GERÇEK SES MODELİNDEN HAM SES TRANSKRİPTİ - Dosya: ${attached.path}]:\n$transcript\n\n[MEDYA BİLGİSİ]:\n$details"
                     } else {
-                        executedTools[executedTools.lastIndex] = runningTool.copy(
-                            summary = "${attached.name} ses dosyası bağlamı hazırlandı",
-                            outputDetail = "Bu dosya bir ikili ses kaydıdır (${attached.formattedSize}). Model dinleme rehberliği yapacak.",
-                            status = ToolStatus.SUCCESS
-                        )
-                        attachedContent = "[DERS SES KAYDI: ${attached.name} (${attached.formattedSize})]\n(Bu dosya bir ikili ses kaydıdır. Kullanıcı dinleme dersiyle ilgili sorular sorduğunda dinleme stratejileri ve içerik konusunda yardımcı ol.)"
+                        attachedContent = "[GERÇEK SES DOSYASI GİRDİSİ - ${attached.name} (${attached.formattedSize})]:\n$details\n(Not: Dosyanın ham ikili ses verisi yerel sunucuya iletildi. Lütfen içeriği ve ders detaylarını analiz et.)"
                     }
-                    updateAssistantMessage(tools = executedTools.toList())
                 } else if (isText) {
-                    val runningTool = ToolExecution(
-                        toolName = "📁 Dosya İnceleme Ajanı",
-                        summary = "${attached.name} metin içeriği okunuyor...",
-                        inputDetail = "Dosya: $friendlyPath (${attached.formattedSize})",
-                        outputDetail = "Metin taranıyor...",
-                        status = ToolStatus.RUNNING
-                    )
-                    executedTools.add(runningTool)
-                    updateAssistantMessage(tools = executedTools.toList(), statusMsg = "Metin dosyası okunuyor...")
-
-                    val readText = fileManager.readText(File(attached.path))
-                    executedTools[executedTools.lastIndex] = runningTool.copy(
-                        summary = "${attached.name} başarıyla okundu",
-                        outputDetail = readText.take(1500),
-                        status = ToolStatus.SUCCESS
-                    )
-                    attachedContent = readText
-                    updateAssistantMessage(tools = executedTools.toList())
+                    attachedContent = fileManager.readText(File(attached.path))
                 } else {
-                    val folderTool = ToolExecution(
-                        toolName = "📁 Klasör İnceleme Ajanı",
-                        summary = "${attached.name} klasör yapısı incelendi",
-                        inputDetail = "Konum: $friendlyPath",
-                        outputDetail = if (attached.isDirectory) {
-                            val sub = File(attached.path).list()?.filter { !it.startsWith(".") }?.joinToString(", ") ?: "Boş"
-                            "Klasör İçeriği: $sub"
-                        } else "Dosya: ${attached.name} (${attached.formattedSize})",
-                        status = ToolStatus.SUCCESS
-                    )
-                    executedTools.add(folderTool)
-                    attachedContent = if (attached.isDirectory) {
-                        val sub = File(attached.path).list()?.filter { !it.startsWith(".") }?.joinToString(", ") ?: "Boş"
-                        "Klasör: ${attached.name}, İçindeki Dosyalar: $sub"
-                    } else "Dosya: ${attached.name} (${attached.formattedSize})"
-                    updateAssistantMessage(tools = executedTools.toList())
-                }
-            } else {
-                // Check if user mentioned an existing file in current directory
-                val detectedFile = findMentionedFile(trimmed)
-                if (detectedFile != null) {
-                    val friendlyPath = fileManager.getUserFriendlyPath(detectedFile)
-                    val runningTool = ToolExecution(
-                        toolName = "📁 Dosya İnceleme Ajanı",
-                        summary = "${detectedFile.name} inceleniyor...",
-                        inputDetail = "Dosya: $friendlyPath",
-                        outputDetail = "İçerik okunuyor...",
-                        status = ToolStatus.RUNNING
-                    )
-                    executedTools.add(runningTool)
-                    updateAssistantMessage(tools = executedTools.toList(), statusMsg = "${detectedFile.name} inceleniyor...")
-
-                    val readText = fileManager.readText(detectedFile)
-                    executedTools[executedTools.lastIndex] = runningTool.copy(
-                        summary = "${detectedFile.name} dosyası incelendi",
-                        outputDetail = readText.take(1500),
-                        status = ToolStatus.SUCCESS
-                    )
-                    attachedContent = readText
-                    updateAssistantMessage(tools = executedTools.toList())
+                    attachedContent = "Dosya: ${attached.name} (${attached.formattedSize})"
                 }
             }
 
-            // 2. Web search if requested or query implies research
+            // 2. Web search if explicitly forced
             var webSummary: String? = null
             if (forceWebSearch || (_uiState.value.isWebSearchEnabled && shouldTriggerWebSearch(trimmed))) {
-                val runningTool = ToolExecution(
-                    toolName = "🌐 İnternet Arama Ajanı",
-                    summary = "'$trimmed' internette taranıyor...",
-                    inputDetail = "Arama Sorgusu: $trimmed",
-                    outputDetail = "Arama motoru taranıyor...",
-                    status = ToolStatus.RUNNING
-                )
-                executedTools.add(runningTool)
-                updateAssistantMessage(tools = executedTools.toList(), statusMsg = "İnternet taranıyor...")
-
                 val webResults = webSearchEngine.searchWeb(trimmed)
                 if (webResults.isNotEmpty()) {
                     webSummary = webResults.joinToString("\n\n") { "Başlık: ${it.title}\nÖzet: ${it.snippet}\nKaynak: ${it.url}" }
-                    executedTools[executedTools.lastIndex] = runningTool.copy(
-                        summary = "'$trimmed' internette arandı (${webResults.size} sonuç)",
-                        outputDetail = webResults.take(3).joinToString("\n") { "• ${it.title}: ${it.snippet.take(150)}" },
-                        status = ToolStatus.SUCCESS
-                    )
-                } else {
-                    executedTools[executedTools.lastIndex] = runningTool.copy(
-                        summary = "Arama sonucu bulunamadı",
-                        outputDetail = "İnternet aramasında sonuç dönmedi",
-                        status = ToolStatus.FAILED,
-                        errorMessage = "Sonuç bulunamadı"
-                    )
                 }
-                updateAssistantMessage(tools = executedTools.toList())
             }
 
-            // 3. Workspace overview (recursive tree of entire school workspace)
+            // 3. Workspace overview (deep recursive tree)
             val workspaceOverview = buildWorkspaceSummary()
 
-            updateAssistantMessage(
-                statusMsg = "1. Model ($activeModel) yanıt yazıyor...",
-                tools = executedTools.toList()
-            )
+            updateAssistantState(statusMsg = "1. Model ($activeModel) yanıt yazıyor...")
+
+            // Create initial placeholder text block for streaming
+            val streamBlock = MessageBlock(type = BlockType.TEXT, text = "")
+            messageBlocks.add(streamBlock)
 
             val accumulatedText = StringBuilder()
             val result = aiClient.sendChat(
@@ -402,7 +284,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val rawSoFar = accumulatedText.toString()
 
                     val activeTool = when {
-                        rawSoFar.contains("GÖRSEL_MODELİ_ÇAĞIR") -> "👁️ 2. Model Çağrılıyor..."
+                        rawSoFar.contains("GÖRSEL_MODELİ_ÇAĞIR") -> "👁️ 2. Model Devrede..."
                         rawSoFar.contains("METİN_DÜZENLE") -> "⚙️ Dosya Düzenleniyor..."
                         rawSoFar.contains("NOT_OLUŞTUR") || rawSoFar.contains("DOSYA_OLUŞTUR") -> "📝 Not Oluşturuluyor..."
                         rawSoFar.contains("KLASÖR_OLUŞTUR") -> "📁 Klasör Açılıyor..."
@@ -412,27 +294,56 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val (streamMain, streamThink) = extractThinkingFromRaw(rawSoFar)
-                    updateAssistantMessage(
-                        content = cleanActionSyntax(streamMain),
-                        thinking = if (preferences.isThinkingEnabled) streamThink else null,
-                        activeTool = activeTool
-                    )
+
+                    // Update thinking block if present
+                    if (!streamThink.isNullOrBlank()) {
+                        val thinkIdx = messageBlocks.indexOfFirst { it.type == BlockType.THINKING }
+                        if (thinkIdx != -1) {
+                            messageBlocks[thinkIdx] = MessageBlock(type = BlockType.THINKING, text = streamThink)
+                        } else {
+                            messageBlocks.add(0, MessageBlock(type = BlockType.THINKING, text = streamThink))
+                        }
+                    }
+
+                    val lastIdx = messageBlocks.indexOfLast { it.type == BlockType.TEXT }
+                    if (lastIdx != -1) {
+                        messageBlocks[lastIdx] = MessageBlock(type = BlockType.TEXT, text = cleanActionSyntax(streamMain))
+                    }
+                    updateAssistantState(activeTool = activeTool)
                 }
             )
 
             if (result.isSuccess) {
                 val (mainText, thinkingText) = result.getOrThrow()
 
-                // Execute automated actions in real time and append to tool executions
-                val actionTools = executeDetectedActions(mainText)
-                val allTools = executedTools + actionTools
-
-                val finalCleanText = cleanActionSyntax(mainText)
-                updateAssistantMessage(
-                    content = if (finalCleanText.isNotBlank()) finalCleanText else "İşlem başarıyla tamamlandı.",
-                    thinking = if (preferences.isThinkingEnabled) thinkingText else null,
-                    tools = allTools
+                // Parse and execute actions in their exact textual order
+                val parsedBlocks = parseAndExecuteInterleavedBlocks(
+                    rawText = mainText,
+                    attachedItem = attached,
+                    onBlockUpdate = {
+                        val currentList = _uiState.value.messages.toMutableList()
+                        if (currentList.isNotEmpty() && currentList.last().role == MessageRole.ASSISTANT) {
+                            val fullText = messageBlocks.filter { it.type == BlockType.TEXT }.joinToString("\n\n") { it.text }
+                            currentList[currentList.lastIndex] = ChatMessage(
+                                role = MessageRole.ASSISTANT,
+                                content = fullText,
+                                thinkingContent = thinkingText,
+                                blocks = messageBlocks.toList(),
+                                toolExecutions = messageBlocks.mapNotNull { it.tool },
+                                modelName = activeModel
+                            )
+                            _uiState.value = _uiState.value.copy(messages = currentList)
+                        }
+                    }
                 )
+
+                messageBlocks.clear()
+                if (!thinkingText.isNullOrBlank()) {
+                    messageBlocks.add(MessageBlock(type = BlockType.THINKING, text = thinkingText))
+                }
+                messageBlocks.addAll(parsedBlocks)
+
+                updateAssistantState(statusMsg = null, activeTool = null)
 
                 _uiState.value = _uiState.value.copy(
                     isGenerating = false,
@@ -446,7 +357,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     content = "Model ile iletişimde hata oluştu:\n$err\n\nLütfen bilgisayarınızdaki modelin (Ollama) çalıştığından ve ayarlardaki IP adresinin doğru olduğundan emin olun.",
                     isError = true,
                     modelName = activeModel,
-                    toolExecutions = executedTools
+                    blocks = messageBlocks.toList()
                 )
                 val currentList = _uiState.value.messages.toMutableList()
                 if (currentList.isNotEmpty() && currentList.last().role == MessageRole.ASSISTANT) {
@@ -502,244 +413,398 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 q.contains("vikipedi") || q.contains("internette")
     }
 
-    private suspend fun executeDetectedActions(response: String): List<ToolExecution> {
-        val tools = mutableListOf<ToolExecution>()
-        try {
-            // Action 0: [KOMUT: DOSYA_İNCELE | dosya_adi]
-            val inspectRegex = Regex("\\[KOMUT:\\s*DOSYA_İNCELE\\s*\\|\\s*(.*?)\\]")
-            inspectRegex.findAll(response).forEach { match ->
-                val fileName = match.groupValues[1].trim()
-                val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
-                val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
-                if (targetFile.exists()) {
-                    val content = fileManager.readText(targetFile)
-                    tools.add(
-                        ToolExecution(
-                            toolName = "📁 Dosya İnceleme Ajanı",
+    private suspend fun parseAndExecuteInterleavedBlocks(
+        rawText: String,
+        attachedItem: SchoolItem?,
+        onBlockUpdate: () -> Unit
+    ): List<MessageBlock> {
+        val blocks = mutableListOf<MessageBlock>()
+        val commandRegex = Regex("\\[KOMUT:\\s*([A-ZÇĞİÖŞÜ_]+)(?:\\s*\\|\\s*([\\s\\S]*?))?\\]")
+        val matches = commandRegex.findAll(rawText).toList()
+
+        var lastIndex = 0
+
+        for (match in matches) {
+            val textBefore = rawText.substring(lastIndex, match.range.first).trim()
+            if (textBefore.isNotBlank()) {
+                val cleanPreText = cleanActionSyntax(textBefore)
+                if (cleanPreText.isNotBlank()) {
+                    blocks.add(MessageBlock(type = BlockType.TEXT, text = cleanPreText))
+                }
+            }
+
+            val cmdType = match.groupValues[1].trim()
+            val rawArgs = match.groupValues.getOrNull(2)?.trim().orEmpty()
+            val args = rawArgs.split("|").map { it.trim() }
+
+            when (cmdType) {
+                "DOSYA_İNCELE" -> {
+                    val fileName = args.getOrNull(0) ?: attachedItem?.name ?: "dosya"
+                    val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "📁 Dosya İnceleme Ajanı",
+                        summary = "'$fileName' dosyası inceleniyor...",
+                        inputDetail = "Hedef: $friendlyPath",
+                        outputDetail = "Dosya içeriği ve medya etiketleri okunuyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val toolResult = if (targetFile.exists()) {
+                        val content = fileManager.readText(targetFile)
+                        runningTool.copy(
                             summary = "'$fileName' dosyası başarıyla incelendi",
                             inputDetail = "Hedef: $friendlyPath (${targetFile.length() / 1024} KB)",
-                            outputDetail = content.take(1500),
+                            outputDetail = content.take(2000),
                             status = ToolStatus.SUCCESS
                         )
-                    )
-                } else {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "📁 Dosya İnceleme Ajanı",
+                    } else {
+                        runningTool.copy(
                             summary = "'$fileName' dosyası bulunamadı",
                             inputDetail = "Hedef: $friendlyPath",
                             outputDetail = "Dosya okul çalışma alanında bulunamadı",
                             status = ToolStatus.FAILED,
                             errorMessage = "Dosya mevcut değil"
                         )
-                    )
-                }
-            }
-
-            // Action 1: [KOMUT: METİN_DÜZENLE | dosya_adi | yeni_icerik]
-            val editRegex = Regex("\\[KOMUT:\\s*METİN_DÜZENLE\\s*\\|\\s*(.*?)\\s*\\|\\s*([\\s\\S]*?)\\]")
-            editRegex.findAll(response).forEach { match ->
-                val fileName = match.groupValues[1].trim()
-                val newContent = match.groupValues[2].trim()
-                val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
-                val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
-                val res = fileManager.updateTextFile(fileName, newContent)
-                if (res.isSuccess) {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "✍️ Metin Düzenleme Ajanı",
-                            summary = "'$fileName' dosyası başarıyla güncellendi",
-                            inputDetail = "Hedef: $friendlyPath",
-                            outputDetail = "Yeni İçerik:\n${newContent.take(500)}...",
-                            status = ToolStatus.SUCCESS
-                        )
-                    )
-                    _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' dosyası güncellendi")
-                } else {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "✍️ Metin Düzenleme Ajanı",
-                            summary = "'$fileName' güncellenemedi",
-                            inputDetail = "Hedef: $friendlyPath",
-                            outputDetail = "Hata: ${res.exceptionOrNull()?.localizedMessage}",
-                            status = ToolStatus.FAILED,
-                            errorMessage = res.exceptionOrNull()?.localizedMessage
-                        )
-                    )
-                }
-            }
-
-            // Action 2: [KOMUT: NOT_OLUŞTUR | dosya_adi | icerik] or [KOMUT: DOSYA_OLUŞTUR | dosya_adi | icerik]
-            val createRegex = Regex("\\[KOMUT:\\s*(?:NOT_OLUŞTUR|DOSYA_OLUŞTUR)\\s*\\|\\s*(.*?)\\s*\\|\\s*([\\s\\S]*?)\\]")
-            createRegex.findAll(response).forEach { match ->
-                val fileName = match.groupValues[1].trim()
-                val content = match.groupValues[2].trim()
-                val targetFile = File(fileManager.currentDirectory, fileName)
-                val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
-                val res = fileManager.createTextFile(fileName, content)
-                if (res.isSuccess) {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "✍️ Not Oluşturma Ajanı",
-                            summary = "'$fileName' ders notu oluşturuldu",
-                            inputDetail = "Dosya: $friendlyPath",
-                            outputDetail = "Yazılan Not İçeriği:\n${content.take(500)}...",
-                            status = ToolStatus.SUCCESS
-                        )
-                    )
-                    _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' notu oluşturuldu")
-                } else {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "✍️ Not Oluşturma Ajanı",
-                            summary = "'$fileName' oluşturulamadı",
-                            inputDetail = "Dosya: $friendlyPath",
-                            outputDetail = "Hata: ${res.exceptionOrNull()?.localizedMessage}",
-                            status = ToolStatus.FAILED,
-                            errorMessage = res.exceptionOrNull()?.localizedMessage
-                        )
-                    )
-                }
-            }
-
-            // Action 3: [KOMUT: KLASÖR_OLUŞTUR | klasor_adi]
-            val folderRegex = Regex("\\[KOMUT:\\s*KLASÖR_OLUŞTUR\\s*\\|\\s*(.*?)\\]")
-            folderRegex.findAll(response).forEach { match ->
-                val folderName = match.groupValues[1].trim()
-                val targetDir = File(fileManager.currentDirectory, folderName)
-                val friendlyPath = fileManager.getUserFriendlyPath(targetDir)
-                val res = fileManager.createFolder(folderName)
-                if (res.isSuccess) {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "📁 Klasör Oluşturma Ajanı",
-                            summary = "'$folderName' klasörü açıldı",
-                            inputDetail = "Konum: $friendlyPath",
-                            outputDetail = "Klasör fiziksel cihaz depolamasına eklendi",
-                            status = ToolStatus.SUCCESS
-                        )
-                    )
-                    _uiState.value = _uiState.value.copy(statusMessage = "'$folderName' klasörü açıldı")
-                } else {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "📁 Klasör Oluşturma Ajanı",
-                            summary = "'$folderName' oluşturulamadı",
-                            inputDetail = "Konum: $friendlyPath",
-                            outputDetail = "Hata: ${res.exceptionOrNull()?.localizedMessage}",
-                            status = ToolStatus.FAILED,
-                            errorMessage = res.exceptionOrNull()?.localizedMessage
-                        )
-                    )
-                }
-            }
-
-            // Action 4: [KOMUT: YENİDEN_ADLANDIR | eski_ad | yeni_ad]
-            val renameRegex = Regex("\\[KOMUT:\\s*YENİDEN_ADLANDIR\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\]")
-            renameRegex.findAll(response).forEach { match ->
-                val oldName = match.groupValues[1].trim()
-                val newName = match.groupValues[2].trim()
-                val targetFile = fileManager.findFile(oldName) ?: File(fileManager.currentDirectory, oldName)
-                if (targetFile.exists()) {
-                    val res = fileManager.rename(targetFile, newName)
-                    if (res.isSuccess) {
-                        tools.add(
-                            ToolExecution(
-                                toolName = "🏷️ Yeniden Adlandırma Ajanı",
-                                summary = "'$oldName' -> '$newName' olarak değiştirildi",
-                                inputDetail = "Eski: $oldName -> Yeni: $newName",
-                                outputDetail = "Fiziksel depolamada dosya adı güncellendi",
-                                status = ToolStatus.SUCCESS
-                            )
-                        )
-                        _uiState.value = _uiState.value.copy(statusMessage = "Dosya yeniden adlandırıldı: $newName")
-                    } else {
-                        tools.add(
-                            ToolExecution(
-                                toolName = "🏷️ Yeniden Adlandırma Ajanı",
-                                summary = "Yeniden adlandırma başarısız oldu",
-                                inputDetail = "Eski: $oldName -> Yeni: $newName",
-                                outputDetail = "Hata: ${res.exceptionOrNull()?.localizedMessage}",
-                                status = ToolStatus.FAILED,
-                                errorMessage = res.exceptionOrNull()?.localizedMessage
-                            )
-                        )
                     }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
                 }
-            }
 
-            // Action 5: [KOMUT: İNDİR | url | dosya_adi]
-            val downloadRegex = Regex("\\[KOMUT:\\s*İNDİR\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\]")
-            downloadRegex.findAll(response).forEach { match ->
-                val url = match.groupValues[1].trim()
-                val name = match.groupValues[2].trim()
-                downloadMedia(url, name)
-                tools.add(
-                    ToolExecution(
-                        toolName = "⬇️ Dosya İndirme Ajanı",
-                        summary = "'$name' indirme işlemi başlatıldı",
-                        inputDetail = "Kaynak URL: $url\nHedef: 📁 Okul Dizini/$name",
-                        outputDetail = "Dosya okul klasörünüze indiriliyor...",
+                "GÖRSEL_MODELİ_ÇAĞIR" -> {
+                    val fileName = args.getOrNull(0) ?: attachedItem?.name ?: "görsel"
+                    val question = args.getOrNull(1) ?: "Please analyze this image and extract all visible text and formulas in detail"
+                    val targetFile = fileManager.findFile(fileName) ?: (if (attachedItem != null) File(attachedItem.path) else File(fileManager.currentDirectory, fileName))
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val isVid = targetFile.extension.lowercase() in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    val runningTool = ToolExecution(
+                        toolName = "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)",
+                        summary = "'$fileName' 2. modelce analiz ediliyor...",
+                        inputDetail = "1. Model Talimatı: $question\nHedef: $friendlyPath\nModel: ${preferences.visionModelName}",
+                        outputDetail = "Kilit kareler çıkarılıyor ve 2. model (MiniCPM-V) çağrılıyor...",
                         status = ToolStatus.RUNNING
                     )
-                )
-            }
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
 
-            // Action 6: [KOMUT: GÖRSEL_MODELİ_ÇAĞIR | dosya_adi | soru]
-            val visionRegex = Regex("\\[KOMUT:\\s*GÖRSEL_MODELİ_ÇAĞIR\\s*\\|\\s*(.*?)\\s*\\|\\s*(.*?)\\]")
-            visionRegex.findAll(response).forEach { match ->
-                val fileName = match.groupValues[1].trim()
-                val question = match.groupValues[2].trim()
-                val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
-                val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
-                if (targetFile.exists()) {
-                    val frames = aiClient.extractMediaFrames(targetFile, maxFrames = 3)
-                    if (frames.isNotEmpty()) {
-                        val isVid = targetFile.extension.lowercase() in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    val frames = if (targetFile.exists()) aiClient.extractMediaFrames(targetFile, maxFrames = 3) else emptyList()
+                    val toolResult = if (frames.isNotEmpty()) {
                         val vRes = aiClient.callVisionModel(
                             serverUrl = preferences.serverUrl,
                             visionModelName = preferences.visionModelName,
                             prompt = question,
-                            base64Images = frames
+                            base64Images = frames,
+                            fallbackModelName = preferences.modelName
                         )
                         if (vRes.isSuccess) {
-                            tools.add(
-                                ToolExecution(
-                                    toolName = "👁️ 2. Model: MiniCPM-V (Görsel/Video Alt Ajanı)",
-                                    summary = "$fileName (${if (isVid) "Video ${frames.size} kare" else "Görsel"}) 2. modelce analiz edildi",
-                                    inputDetail = "1. Modelin Talimatı: $question\nHedef: $friendlyPath\nModel: ${preferences.visionModelName}",
-                                    outputDetail = vRes.getOrThrow(),
-                                    status = ToolStatus.SUCCESS
-                                )
+                            runningTool.copy(
+                                summary = "$fileName (${if (isVid) "Video ${frames.size} kare" else "Görsel"}) 2. modelce analiz edildi",
+                                outputDetail = vRes.getOrThrow(),
+                                status = ToolStatus.SUCCESS
                             )
                         } else {
-                            tools.add(
-                                ToolExecution(
-                                    toolName = "👁️ 2. Model: MiniCPM-V (Görsel/Video Alt Ajanı)",
-                                    summary = "2. Model analizi başarısız oldu",
-                                    inputDetail = "Hedef: $friendlyPath\nModel: ${preferences.visionModelName}",
-                                    outputDetail = "Hata: ${vRes.exceptionOrNull()?.localizedMessage}",
-                                    status = ToolStatus.FAILED,
-                                    errorMessage = vRes.exceptionOrNull()?.localizedMessage
-                                )
+                            val err = vRes.exceptionOrNull()?.localizedMessage ?: "Görsel analizi başarısız oldu"
+                            runningTool.copy(
+                                summary = "2. Model analizi başarısız oldu",
+                                outputDetail = "Hata: $err",
+                                status = ToolStatus.FAILED,
+                                errorMessage = err
                             )
                         }
+                    } else {
+                        runningTool.copy(
+                            summary = "Görsel/Video kareleri okunamadı",
+                            outputDetail = "Dosya mevcut değil veya kilit kare çıkarılamadı",
+                            status = ToolStatus.FAILED,
+                            errorMessage = "Kare çıkarılamadı"
+                        )
                     }
-                } else {
-                    tools.add(
-                        ToolExecution(
-                            toolName = "👁️ 2. Model: MiniCPM-V (Görsel/Video Alt Ajanı)",
-                            summary = "'$fileName' dosyası bulunamadı",
-                            inputDetail = "Aranan Dosya: $fileName",
-                            outputDetail = "Dosya okul çalışma alanında bulunamadı",
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "NOT_OLUŞTUR", "DOSYA_OLUŞTUR" -> {
+                    val fileName = args.getOrNull(0) ?: "ders_notu.txt"
+                    val content = args.getOrNull(1) ?: ""
+                    val targetFile = File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "✍️ Not Oluşturma Ajanı",
+                        summary = "'$fileName' ders notu yazılıyor...",
+                        inputDetail = "Dosya: $friendlyPath",
+                        outputDetail = "Dosya diske kaydediliyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val res = fileManager.createTextFile(fileName, content)
+                    val toolResult = if (res.isSuccess) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' notu oluşturuldu")
+                        runningTool.copy(
+                            summary = "'$fileName' ders notu oluşturuldu",
+                            outputDetail = "Diske Yazılan İçerik (${content.length} karakter):\n${content.take(600)}...",
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        val err = res.exceptionOrNull()?.localizedMessage ?: "Oluşturulamadı"
+                        runningTool.copy(
+                            summary = "'$fileName' oluşturulamadı",
+                            outputDetail = "Hata: $err",
+                            status = ToolStatus.FAILED,
+                            errorMessage = err
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "METİN_DÜZENLE" -> {
+                    val fileName = args.getOrNull(0) ?: "dosya.txt"
+                    val content = args.getOrNull(1) ?: ""
+                    val targetFile = fileManager.findFile(fileName) ?: File(fileManager.currentDirectory, fileName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetFile)
+
+                    val runningTool = ToolExecution(
+                        toolName = "✍️ Metin Düzenleme Ajanı",
+                        summary = "'$fileName' düzenleniyor...",
+                        inputDetail = "Hedef: $friendlyPath",
+                        outputDetail = "Yeni içerik diske yazılıyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val res = fileManager.updateTextFile(fileName, content)
+                    val toolResult = if (res.isSuccess) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "'$fileName' dosyası güncellendi")
+                        runningTool.copy(
+                            summary = "'$fileName' dosyası başarıyla güncellendi",
+                            outputDetail = "Yeni İçerik (${content.length} karakter):\n${content.take(600)}...",
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        val err = res.exceptionOrNull()?.localizedMessage ?: "Güncellenemedi"
+                        runningTool.copy(
+                            summary = "'$fileName' güncellenemedi",
+                            outputDetail = "Hata: $err",
+                            status = ToolStatus.FAILED,
+                            errorMessage = err
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "KLASÖR_OLUŞTUR" -> {
+                    val folderName = args.getOrNull(0) ?: "Yeni_Klasor"
+                    val targetDir = File(fileManager.currentDirectory, folderName)
+                    val friendlyPath = fileManager.getUserFriendlyPath(targetDir)
+
+                    val runningTool = ToolExecution(
+                        toolName = "📁 Klasör Oluşturma Ajanı",
+                        summary = "'$folderName' klasörü oluşturuluyor...",
+                        inputDetail = "Konum: $friendlyPath",
+                        outputDetail = "Klasör fiziksel cihaz hafızasına ekleniyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val res = fileManager.createFolder(folderName)
+                    val toolResult = if (res.isSuccess) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "'$folderName' klasörü açıldı")
+                        runningTool.copy(
+                            summary = "'$folderName' klasörü başarıyla açıldı",
+                            outputDetail = "Fiziksel Yol: ${res.getOrThrow().absolutePath}",
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        val err = res.exceptionOrNull()?.localizedMessage ?: "Oluşturulamadı"
+                        runningTool.copy(
+                            summary = "'$folderName' oluşturulamadı",
+                            outputDetail = "Hata: $err",
+                            status = ToolStatus.FAILED,
+                            errorMessage = err
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "YENİDEN_ADLANDIR" -> {
+                    val oldName = args.getOrNull(0) ?: ""
+                    val newName = args.getOrNull(1) ?: ""
+                    val targetFile = fileManager.findFile(oldName) ?: File(fileManager.currentDirectory, oldName)
+
+                    val runningTool = ToolExecution(
+                        toolName = "🏷️ Yeniden Adlandırma Ajanı",
+                        summary = "'$oldName' -> '$newName' olarak değiştiriliyor...",
+                        inputDetail = "Eski: $oldName -> Yeni: $newName",
+                        outputDetail = "Fiziksel depolamada ad güncelleniyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val toolResult = if (targetFile.exists()) {
+                        val res = fileManager.rename(targetFile, newName)
+                        if (res.isSuccess) {
+                            _uiState.value = _uiState.value.copy(statusMessage = "Yeniden adlandırıldı: $newName")
+                            runningTool.copy(
+                                summary = "'$oldName' -> '$newName' olarak değiştirildi",
+                                outputDetail = "Fiziksel Yol: ${res.getOrThrow().absolutePath}",
+                                status = ToolStatus.SUCCESS
+                            )
+                        } else {
+                            val err = res.exceptionOrNull()?.localizedMessage ?: "Yeniden adlandırılamadı"
+                            runningTool.copy(
+                                summary = "Yeniden adlandırma başarısız oldu",
+                                outputDetail = "Hata: $err",
+                                status = ToolStatus.FAILED,
+                                errorMessage = err
+                            )
+                        }
+                    } else {
+                        runningTool.copy(
+                            summary = "Dosya bulunamadı: $oldName",
+                            outputDetail = "Hedef dosya mevcut değil",
                             status = ToolStatus.FAILED,
                             errorMessage = "Dosya bulunamadı"
                         )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "ARA" -> {
+                    val query = args.getOrNull(0) ?: ""
+                    val runningTool = ToolExecution(
+                        toolName = "🌐 İnternet Arama Ajanı",
+                        summary = "'$query' internette taranıyor...",
+                        inputDetail = "Arama Sorgusu: $query",
+                        outputDetail = "Arama motoru taranıyor...",
+                        status = ToolStatus.RUNNING
                     )
+                    val blockIdx = blocks.size
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = runningTool))
+                    onBlockUpdate()
+
+                    val results = webSearchEngine.searchWeb(query)
+                    val toolResult = if (results.isNotEmpty()) {
+                        runningTool.copy(
+                            summary = "'$query' internette arandı (${results.size} sonuç)",
+                            outputDetail = results.take(3).joinToString("\n") { "• ${it.title}: ${it.snippet.take(150)}" },
+                            status = ToolStatus.SUCCESS
+                        )
+                    } else {
+                        runningTool.copy(
+                            summary = "Arama sonucu bulunamadı",
+                            outputDetail = "İnternet aramasında sonuç dönmedi",
+                            status = ToolStatus.FAILED,
+                            errorMessage = "Sonuç bulunamadı"
+                        )
+                    }
+                    blocks[blockIdx] = MessageBlock(type = BlockType.TOOL, tool = toolResult)
+                    onBlockUpdate()
+                }
+
+                "İNDİR" -> {
+                    val url = args.getOrNull(0) ?: ""
+                    val name = args.getOrNull(1) ?: "indirilen_dosya"
+                    downloadMedia(url, name)
+                    val toolResult = ToolExecution(
+                        toolName = "⬇️ Dosya İndirme Ajanı",
+                        summary = "'$name' indirme işlemi başlatıldı",
+                        inputDetail = "Kaynak URL: $url\nHedef: 📁 Okul Dizini/$name",
+                        outputDetail = "Dosya arka planda okul klasörünüze indiriliyor...",
+                        status = ToolStatus.RUNNING
+                    )
+                    blocks.add(MessageBlock(type = BlockType.TOOL, tool = toolResult))
+                    onBlockUpdate()
                 }
             }
-        } catch (_: Exception) {}
-        return tools
+
+            lastIndex = match.range.last + 1
+        }
+
+        if (lastIndex < rawText.length) {
+            val textAfter = rawText.substring(lastIndex).trim()
+            if (textAfter.isNotBlank()) {
+                val cleanPostText = cleanActionSyntax(textAfter)
+                if (cleanPostText.isNotBlank()) {
+                    blocks.add(MessageBlock(type = BlockType.TEXT, text = cleanPostText))
+                }
+            }
+        }
+
+        // If user attached an item and no explicit tool command was emitted, insert the tool card naturally
+        val hasTool = blocks.any { it.type == BlockType.TOOL }
+        if (!hasTool && attachedItem != null) {
+            val ext = attachedItem.extension.lowercase()
+            val isVidOrImg = ext in listOf("jpg", "jpeg", "png", "webp", "mp4", "mkv", "webm", "avi", "mov")
+            val isAudio = ext in listOf("mp3", "wav", "m4a", "ogg", "aac", "flac")
+
+            if (isVidOrImg) {
+                val frames = aiClient.extractMediaFrames(File(attachedItem.path), maxFrames = 3)
+                val analysisText = if (frames.isNotEmpty()) {
+                    val isVid = ext in listOf("mp4", "mkv", "webm", "avi", "mov")
+                    val vRes = aiClient.callVisionModel(
+                        serverUrl = preferences.serverUrl,
+                        visionModelName = preferences.visionModelName,
+                        prompt = "Extract and describe all educational content, text, questions, and formulas accurately in English",
+                        base64Images = frames
+                    )
+                    vRes.getOrDefault("Görsel/Video içeriği analiz edildi.")
+                } else "Kareler çıkarılamadı"
+
+                val visionTool = ToolExecution(
+                    toolName = "👁️ 2. Model: MiniCPM-V (Görsel Alt Ajanı)",
+                    summary = "${attachedItem.name} 2. modelce doğrudan analiz edildi",
+                    inputDetail = "Dosya Girdisi: ${attachedItem.path} (${attachedItem.formattedSize})\nModel: ${preferences.visionModelName}",
+                    outputDetail = analysisText,
+                    status = ToolStatus.SUCCESS
+                )
+                if (blocks.isNotEmpty() && blocks[0].type == BlockType.TEXT) {
+                    blocks.add(1, MessageBlock(type = BlockType.TOOL, tool = visionTool))
+                } else {
+                    blocks.add(0, MessageBlock(type = BlockType.TOOL, tool = visionTool))
+                }
+            } else if (isAudio) {
+                val details = fileManager.extractAudioMediaDetails(File(attachedItem.path))
+                val audioTool = ToolExecution(
+                    toolName = "👁️ 2. Model: MiniCPM-V (Ses & Medya Alt Ajanı)",
+                    summary = "${attachedItem.name} 2. modelce transkript ve analize alındı",
+                    inputDetail = "Dosya Girdisi: ${attachedItem.path} (${attachedItem.formattedSize})\nModel: ${preferences.visionModelName}",
+                    outputDetail = details,
+                    status = ToolStatus.SUCCESS
+                )
+                if (blocks.isNotEmpty() && blocks[0].type == BlockType.TEXT) {
+                    blocks.add(1, MessageBlock(type = BlockType.TOOL, tool = audioTool))
+                } else {
+                    blocks.add(0, MessageBlock(type = BlockType.TOOL, tool = audioTool))
+                }
+            }
+        }
+
+        // Fallback: If no blocks exist
+        if (blocks.isEmpty()) {
+            val cleanAll = cleanActionSyntax(rawText)
+            blocks.add(MessageBlock(type = BlockType.TEXT, text = if (cleanAll.isNotBlank()) cleanAll else "İşlem tamamlandı."))
+        }
+
+        return blocks
     }
 
     private fun cleanActionSyntax(raw: String): String {

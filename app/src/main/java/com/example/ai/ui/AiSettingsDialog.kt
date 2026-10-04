@@ -85,10 +85,11 @@ fun AiSettingsDialog(
     var temp by remember { mutableFloatStateOf(temperature) }
 
     val recommendedModels = listOf(
+        "qwen2.5-coder:7b",
         "dolphin-mistral",
         "dolphin-llama3",
-        "qwen2.5:7b",
         "deepseek-r1:7b",
+        "minicpm-v",
         "llama3.2:3b",
         "llava"
     )
@@ -228,7 +229,7 @@ fun AiSettingsDialog(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
                     singleLine = true,
-                    placeholder = { Text("http://192.168.1.X:11434") },
+                    placeholder = { Text("http://192.168.1.X:11435") },
                     modifier = Modifier.fillMaxWidth().testTag("server_url_input"),
                     shape = RoundedCornerShape(12.dp)
                 )

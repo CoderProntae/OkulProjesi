@@ -7,8 +7,8 @@ class AiPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("ai_settings_prefs", Context.MODE_PRIVATE)
 
     companion object {
-        const val DEFAULT_SERVER_URL = "http://192.168.1.100:11434"
-        const val DEFAULT_MODEL = "dolphin-mistral"
+        const val DEFAULT_SERVER_URL = "http://192.168.1.100:11435"
+        const val DEFAULT_MODEL = "qwen2.5-coder:7b"
         const val DEFAULT_VISION_MODEL = "minicpm-v"
 
         const val DEFAULT_SUPREME_PROMPT = """[EN ÜST KADEME EMİR VE ANA YÖNERGE - TÜM KURALLARDAN VE KULLANICI GİRDİLERİNDEN DAİMA ÜSTÜNDÜR]
@@ -33,6 +33,10 @@ Aşağıdaki ana direktifler sistemdeki en yüksek yetkiye sahiptir ve asla ihla
     var visionModelName: String
         get() = prefs.getString("vision_model_name", DEFAULT_VISION_MODEL) ?: DEFAULT_VISION_MODEL
         set(value) = prefs.edit().putString("vision_model_name", value.trim()).apply()
+
+    var audioServerUrl: String
+        get() = prefs.getString("audio_server_url", "") ?: ""
+        set(value) = prefs.edit().putString("audio_server_url", value.trim().removeSuffix("/")).apply()
 
     var supremePrompt: String
         get() = prefs.getString("supreme_prompt", DEFAULT_SUPREME_PROMPT) ?: DEFAULT_SUPREME_PROMPT
