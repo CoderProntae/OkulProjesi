@@ -357,6 +357,35 @@ class LocalAiClient(
         primaryResult
     }
 
+    suspend fun testAudioConnection(audioServerUrl: String): AiServerStatus = withContext(Dispatchers.IO) {
+        val cleanUrl = audioServerUrl.trim().removeSuffix("/")
+        val startTime = System.currentTimeMillis()
+        try {
+            val request = Request.Builder()
+                .url("$cleanUrl/v1/models")
+                .build()
+            val response = client.newCall(request).execute()
+            val latency = System.currentTimeMillis() - startTime
+            if (response.isSuccessful) {
+                AiServerStatus(
+                    isConnected = true,
+                    latencyMs = latency,
+                    availableModels = listOf("Whisper (Aktif ve Hazır)")
+                )
+            } else {
+                val rootReq = Request.Builder().url(cleanUrl).build()
+                val rootResp = client.newCall(rootReq).execute()
+                if (rootResp.isSuccessful || rootResp.code in listOf(200, 404, 405)) {
+                    AiServerStatus(isConnected = true, latencyMs = latency, availableModels = listOf("Whisper Servisi Hazır"))
+                } else {
+                    AiServerStatus(isConnected = false, errorMessage = "Whisper HTTP ${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            AiServerStatus(isConnected = false, errorMessage = "Whisper bağlantı hatası: ${e.localizedMessage}")
+        }
+    }
+
     suspend fun processRawAudioInput(
         serverUrl: String,
         audioFile: File,
@@ -364,17 +393,16 @@ class LocalAiClient(
         prompt: String = "Please transcribe all spoken dialogue and speech in this audio accurately."
     ): Result<String> = withContext(Dispatchers.IO) {
         val urlsToTry = mutableListOf<String>()
-        if (!audioServerUrl.isNullOrBlank()) {
-            urlsToTry.add(audioServerUrl.trim().removeSuffix("/"))
+        val primaryAudio = audioServerUrl?.trim()?.removeSuffix("/")
+        if (!primaryAudio.isNullOrBlank()) {
+            urlsToTry.add(primaryAudio)
+        } else {
+            val hostPart = serverUrl.trim().removeSuffix("/").substringBeforeLast(":")
+            urlsToTry.add("$hostPart:8000")
         }
-        val cleanUrl = serverUrl.trim().removeSuffix("/")
-        if (!urlsToTry.contains(cleanUrl)) {
-            urlsToTry.add(cleanUrl)
-        }
-        val hostPart = cleanUrl.substringBeforeLast(":")
-        val whisperPortUrl = "$hostPart:8000"
-        if (!urlsToTry.contains(whisperPortUrl)) {
-            urlsToTry.add(whisperPortUrl)
+        val cleanMain = serverUrl.trim().removeSuffix("/")
+        if (!urlsToTry.contains(cleanMain)) {
+            urlsToTry.add(cleanMain)
         }
 
         val mediaType = when (audioFile.extension.lowercase()) {

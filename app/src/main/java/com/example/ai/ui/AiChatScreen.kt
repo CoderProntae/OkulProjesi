@@ -412,14 +412,17 @@ fun AiChatScreen(
             currentServerUrl = uiState.serverUrl,
             currentModelName = uiState.modelName,
             currentVisionModelName = uiState.visionModelName,
+            currentVisionServerUrl = uiState.visionServerUrl,
+            currentAudioServerUrl = uiState.audioServerUrl,
             currentSupremePrompt = uiState.supremePrompt,
             isThinking = uiState.isThinkingEnabled,
             isWebSearch = uiState.isWebSearchEnabled,
             temperature = uiState.temperature,
             serverStatus = uiState.serverStatus,
+            audioServerStatus = uiState.audioServerStatus,
             onTestConnection = { viewModel.testServerConnection() },
-            onSave = { sUrl, mName, vName, sPrompt, isTh, isWs, temp ->
-                viewModel.saveSettings(sUrl, mName, vName, sPrompt, isTh, isWs, temp)
+            onSave = { sUrl, mName, vName, vSUrl, aSUrl, sPrompt, isTh, isWs, temp ->
+                viewModel.saveSettings(sUrl, mName, vName, vSUrl, aSUrl, sPrompt, isTh, isWs, temp)
             },
             onDismiss = { viewModel.setShowSettings(false) }
         )

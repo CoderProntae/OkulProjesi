@@ -67,18 +67,23 @@ fun AiSettingsDialog(
     currentServerUrl: String,
     currentModelName: String,
     currentVisionModelName: String = "minicpm-v",
+    currentVisionServerUrl: String = "",
+    currentAudioServerUrl: String = "http://192.168.1.100:8000",
     currentSupremePrompt: String,
     isThinking: Boolean,
     isWebSearch: Boolean,
     temperature: Float,
     serverStatus: AiServerStatus,
+    audioServerStatus: AiServerStatus = AiServerStatus(),
     onTestConnection: () -> Unit,
-    onSave: (serverUrl: String, modelName: String, visionModelName: String, supremePrompt: String, isThinking: Boolean, isWebSearch: Boolean, temperature: Float) -> Unit,
+    onSave: (serverUrl: String, modelName: String, visionModelName: String, visionServerUrl: String, audioServerUrl: String, supremePrompt: String, isThinking: Boolean, isWebSearch: Boolean, temperature: Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     var serverUrl by remember { mutableStateOf(currentServerUrl) }
     var modelName by remember { mutableStateOf(currentModelName) }
     var visionModelName by remember { mutableStateOf(currentVisionModelName) }
+    var visionServerUrl by remember { mutableStateOf(currentVisionServerUrl) }
+    var audioServerUrl by remember { mutableStateOf(currentAudioServerUrl) }
     var supremePrompt by remember { mutableStateOf(currentSupremePrompt) }
     var thinkingMode by remember { mutableStateOf(isThinking) }
     var webSearchEnabled by remember { mutableStateOf(isWebSearch) }
@@ -364,6 +369,86 @@ fun AiSettingsDialog(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Görsel/Video Sunucusu (Opsiyonel Ayrı Port):",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                OutlinedTextField(
+                    value = visionServerUrl,
+                    onValueChange = { visionServerUrl = it },
+                    singleLine = true,
+                    placeholder = { Text("Boş bırakılırsa ana sunucu ($serverUrl) kullanılır") },
+                    modifier = Modifier.fillMaxWidth().testTag("vision_server_url_input"),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Section 2.6: Ses & Transkript Sunucusu (Whisper Portu)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🎙️ Ses ve Transkript Motoru (Whisper)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (audioServerStatus.isConnected) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                "Aktif (${audioServerStatus.latencyMs}ms)",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Ses dosyalarını (.mp3, .wav) doğrudan dinleyen Whisper sunucu portu.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = audioServerUrl,
+                    onValueChange = { audioServerUrl = it },
+                    singleLine = true,
+                    placeholder = { Text("http://192.168.1.X:8000") },
+                    modifier = Modifier.fillMaxWidth().testTag("audio_server_url_input"),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val baseIp = serverUrl.substringBeforeLast(":")
+                    listOf("$baseIp:8000", "$baseIp:11435").forEach { quickUrl ->
+                        FilterChip(
+                            selected = audioServerUrl == quickUrl,
+                            onClick = { audioServerUrl = quickUrl },
+                            label = { Text(quickUrl.substringAfterLast(":"), fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
@@ -535,6 +620,8 @@ fun AiSettingsDialog(
                             serverUrl.trim(),
                             modelName.trim(),
                             visionModelName.trim(),
+                            visionServerUrl.trim(),
+                            audioServerUrl.trim(),
                             supremePrompt,
                             thinkingMode,
                             webSearchEnabled,

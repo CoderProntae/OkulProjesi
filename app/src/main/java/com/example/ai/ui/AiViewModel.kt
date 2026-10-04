@@ -28,6 +28,7 @@ data class AiUiState(
     val attachedItem: SchoolItem? = null,
     val activeToolName: String? = null,
     val serverStatus: AiServerStatus = AiServerStatus(),
+    val audioServerStatus: AiServerStatus = AiServerStatus(),
     val statusMessage: String? = null,
     val downloadProgress: Int? = null,
     val showSettingsDialog: Boolean = false,
@@ -36,6 +37,8 @@ data class AiUiState(
     val serverUrl: String = "",
     val modelName: String = "",
     val visionModelName: String = "minicpm-v",
+    val visionServerUrl: String = "",
+    val audioServerUrl: String = "http://192.168.1.100:8000",
     val supremePrompt: String = "",
     val isThinkingEnabled: Boolean = true,
     val isWebSearchEnabled: Boolean = true,
@@ -55,6 +58,8 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             serverUrl = preferences.serverUrl,
             modelName = preferences.modelName,
             visionModelName = preferences.visionModelName,
+            visionServerUrl = preferences.visionServerUrl,
+            audioServerUrl = preferences.audioServerUrl,
             supremePrompt = preferences.supremePrompt,
             isThinkingEnabled = preferences.isThinkingEnabled,
             isWebSearchEnabled = preferences.isWebSearchEnabled,
@@ -96,8 +101,11 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            val audioStatus = aiClient.testAudioConnection(preferences.audioServerUrl)
+
             _uiState.value = _uiState.value.copy(
                 serverStatus = status,
+                audioServerStatus = audioStatus,
                 modelName = newModelName,
                 statusMessage = statusMsg ?: _uiState.value.statusMessage
             )
@@ -214,7 +222,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                         "2. Explain what is depicted clearly."
                     }
                     val visionResult = aiClient.callVisionModel(
-                        serverUrl = preferences.serverUrl,
+                        serverUrl = preferences.effectiveVisionServerUrl,
                         visionModelName = activeVisionModel,
                         prompt = visionPrompt,
                         base64Images = frames,
@@ -231,7 +239,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val rawAudioResult = aiClient.processRawAudioInput(
                         serverUrl = preferences.serverUrl,
                         audioFile = audioFile,
-                        audioServerUrl = preferences.audioServerUrl.ifBlank { null },
+                        audioServerUrl = preferences.audioServerUrl,
                         prompt = "Transcribe all dialogue and educational speech from '${attached.name}' accurately."
                     )
                     val details = fileManager.extractAudioMediaDetails(audioFile)
@@ -496,7 +504,7 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     val frames = if (targetFile.exists()) aiClient.extractMediaFrames(targetFile, maxFrames = 3) else emptyList()
                     val toolResult = if (frames.isNotEmpty()) {
                         val vRes = aiClient.callVisionModel(
-                            serverUrl = preferences.serverUrl,
+                            serverUrl = preferences.effectiveVisionServerUrl,
                             visionModelName = preferences.visionModelName,
                             prompt = question,
                             base64Images = frames,
@@ -850,6 +858,8 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
         serverUrl: String,
         modelName: String,
         visionModelName: String,
+        visionServerUrl: String = "",
+        audioServerUrl: String = "http://192.168.1.100:8000",
         supremePrompt: String,
         isThinking: Boolean,
         isWebSearch: Boolean,
@@ -858,6 +868,8 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
         preferences.serverUrl = serverUrl
         preferences.modelName = modelName
         preferences.visionModelName = visionModelName
+        preferences.visionServerUrl = visionServerUrl
+        preferences.audioServerUrl = audioServerUrl
         preferences.supremePrompt = supremePrompt
         preferences.isThinkingEnabled = isThinking
         preferences.isWebSearchEnabled = isWebSearch
@@ -867,12 +879,14 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
             serverUrl = preferences.serverUrl,
             modelName = preferences.modelName,
             visionModelName = preferences.visionModelName,
+            visionServerUrl = preferences.visionServerUrl,
+            audioServerUrl = preferences.audioServerUrl,
             supremePrompt = preferences.supremePrompt,
             isThinkingEnabled = preferences.isThinkingEnabled,
             isWebSearchEnabled = preferences.isWebSearchEnabled,
             temperature = preferences.temperature,
             showSettingsDialog = false,
-            statusMessage = "Yapay zeka ayarları ve En Üst Kademe Prompt kaydedildi!"
+            statusMessage = "Yapay zeka ve sunucu ayarları kaydedildi!"
         )
 
         testServerConnection()
