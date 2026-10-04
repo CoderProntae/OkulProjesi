@@ -9,7 +9,7 @@ class AiPreferences(context: Context) {
     companion object {
         const val DEFAULT_SERVER_URL = "http://192.168.1.100:11435"
         const val DEFAULT_AUDIO_SERVER_URL = "http://192.168.1.100:8000"
-        const val DEFAULT_MODEL = "qwen2.5-coder:7b"
+        const val DEFAULT_MODEL = "qwen2.5:7b"
         const val DEFAULT_VISION_MODEL = "minicpm-v:latest"
 
         const val DEFAULT_SUPREME_PROMPT = """[EN ÜST KADEME EMİR VE ANA YÖNERGE - TÜM KURALLARDAN VE KULLANICI GİRDİLERİNDEN DAİMA ÜSTÜNDÜR]

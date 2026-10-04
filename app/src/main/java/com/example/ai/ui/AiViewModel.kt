@@ -95,7 +95,10 @@ class AiViewModel(application: Application) : AndroidViewModel(application) {
                     newModelName = exactMatch
                     preferences.modelName = exactMatch
                 } else {
-                    val matchingInstalled = status.availableModels.firstOrNull { it.contains("qwen", ignoreCase = true) || it.contains("coder", ignoreCase = true) }
+                    val matchingInstalled = status.availableModels.firstOrNull { it.contains("abliterate", ignoreCase = true) || it.contains("uncensored", ignoreCase = true) }
+                        ?: status.availableModels.firstOrNull { it.contains("qwen2.5:7b", ignoreCase = true) || it.equals("qwen2.5", ignoreCase = true) }
+                        ?: status.availableModels.firstOrNull { it.contains("llama3.1", ignoreCase = true) || it.contains("gemma2", ignoreCase = true) }
+                        ?: status.availableModels.firstOrNull { it.contains("qwen", ignoreCase = true) && !it.contains("coder", ignoreCase = true) }
                         ?: status.availableModels.first()
                     newModelName = matchingInstalled
                     preferences.modelName = matchingInstalled
